@@ -62,6 +62,7 @@ private:
     std::uint32_t windowId_{0};     // SDL window id, used to route events
     std::string iniFilename_;       // per-window imgui layout file (keeps lifetime)
     bool open_{false};
+    int diagFramesLogged_{0};       // short-lived context/draw diagnostic (temporary)
 };
 
 } // namespace avb

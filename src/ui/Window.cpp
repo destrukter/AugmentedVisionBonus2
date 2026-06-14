@@ -127,7 +127,27 @@ void Window::renderFrame() {
 
     drawUi();
 
+    // drawUi() may have handed the GL context to another library (the Camera
+    // window drives an off-screen OGRE render). Re-assert this window's context
+    // before the final clear + ImGui draw, or those commands land in the wrong
+    // context and the window is presented blank.
+    const int makeCurrentResult = SDL_GL_MakeCurrent(sdlWindow_, glContext_);
+    ImGui::SetCurrentContext(imguiContext_);
+
     ImGui::Render();
+
+    // Short-lived diagnostic: confirm the context is actually ours and that
+    // ImGui produced geometry. Logs only the first few frames per window.
+    if (diagFramesLogged_ < 3) {
+        ++diagFramesLogged_;
+        const bool contextIsCurrent =
+            SDL_GL_GetCurrentContext() == static_cast<SDL_GLContext>(glContext_);
+        const ImDrawData* dd = ImGui::GetDrawData();
+        SDL_Log("[diag] '%s' makeCurrent=%d ctxCurrent=%d cmdLists=%d vtx=%d",
+                title_.c_str(), makeCurrentResult, contextIsCurrent ? 1 : 0,
+                dd ? dd->CmdListsCount : -1, dd ? dd->TotalVtxCount : -1);
+    }
+
     const ImGuiIO& io = ImGui::GetIO();
     glViewport(0, 0, static_cast<int>(io.DisplaySize.x),
                static_cast<int>(io.DisplaySize.y));
