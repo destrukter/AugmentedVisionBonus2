@@ -30,6 +30,7 @@ add_executable(AugmentedVisionBonus2
 target_include_directories(AugmentedVisionBonus2 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${OpenCV_INCLUDE_DIRS}
+    ${OGRE_INCLUDE_DIRS}
 )
 
 target_link_libraries(AugmentedVisionBonus2 PRIVATE
@@ -38,6 +39,7 @@ target_link_libraries(AugmentedVisionBonus2 PRIVATE
     ${OpenCV_LIBS}
     assimp::assimp
     OgreMain
+    OgreRTShaderSystem
     SDL2::SDL2
     OpenGL::GL
     imgui

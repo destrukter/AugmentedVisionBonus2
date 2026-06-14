@@ -61,11 +61,26 @@ library with no UI dependencies, so CI can run it headless.
 
 ### `src/render` — OGRE3D + Assimp
 
-- `OgreContext` — owns `Ogre::Root` and the scene manager.
-- `ModelLoader` — imports FBX via Assimp and builds `Ogre::Mesh` objects (OGRE
-  has no native FBX importer).
-- `SceneRenderer` — composites the camera feed with assigned models at their
-  poses into a texture the Camera window shows via `ImGui::Image`.
+- `OgreContext` — owns `Ogre::Root`, loads the GL render-system plugin
+  programmatically, creates a hidden 1x1 render window (so a GL context exists
+  without an extra OS window), owns the scene manager, and initialises the RTSS
+  shader generator (with a scheme-not-found resolver) so default materials
+  render under the GL3+ shader-only pipeline.
+- `ModelLoader` — imports FBX via Assimp and builds a cached `Ogre::Mesh` from an
+  `Ogre::ManualObject` (positions/normals/UVs/indices), assigning a shared
+  default lit material. OGRE has no native FBX importer.
+- `SceneRenderer` — renders the assigned models (over a transparent background)
+  into an off-screen render texture, reads the RGBA result back to the CPU, and
+  alpha-composites it over the camera frame. This avoids sharing GL contexts
+  between OGRE and the window's SDL/GL context.
+
+#### Why CPU read-back?
+
+OGRE owns its own GL context; the Camera window's texture lives in the SDL GL
+context. Rather than set up shared GL contexts (fragile, driver-dependent), the
+renderer reads the RTT back to a `cv::Mat` and the Camera window uploads that to
+a GL texture it owns (`glTexSubImage2D`) for `ImGui::Image`. Camera frames are
+already CPU-side from OpenCV, so this keeps the pipeline simple and robust.
 
 ### `src/vision` — OpenCV
 
@@ -90,7 +105,10 @@ library with no UI dependencies, so CI can run it headless.
 3. **Render**: each frame the Camera window grabs a frame, asks `ImageTracker`
    which images are visible, and for each detected image looks up
    `store->assignmentsForImage(imageId)` and renders each model at
-   `detection.poseInCamera * assignment.transform.toMatrix()`.
+   `detection.poseInCamera * assignment.transform.toMatrix()`. When nothing is
+   tracked yet (the tracker is still a stub) but assignments exist, the window
+   renders the first assigned model at a fixed preview pose so the 3D pipeline is
+   visible; toggle this with the "Preview model when untracked" checkbox.
 
 ## Build notes
 
