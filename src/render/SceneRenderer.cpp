@@ -168,15 +168,25 @@ void SceneRenderer::endFrame() {
         cv::cvtColor(resized, composited_, cv::COLOR_BGR2RGBA);
     }
 
-    // Alpha-composite the overlay over the background (straight alpha).
+    // Composite the rendered overlay over the camera background.
+    //
+    // We key on the overlay's RGB (the clear colour) rather than its alpha
+    // channel. The off-screen render target is cleared to transparent black, but
+    // many Linux GL drivers hand the FBO's alpha channel back as fully opaque
+    // (255) everywhere through copyContentsToMemory. With a straight-alpha
+    // composite that would blend the overlay's black clear colour over the whole
+    // camera frame and blank the feed entirely. Treating pure-black overlay
+    // pixels as "nothing drawn here" keeps the camera visible wherever no model
+    // was rendered, regardless of how the driver reports alpha; rendered model
+    // pixels are lit and therefore non-black.
     for (int y = 0; y < height_; ++y) {
         const cv::Vec4b* o = overlay.ptr<cv::Vec4b>(y);
         cv::Vec4b* d = composited_.ptr<cv::Vec4b>(y);
         for (int x = 0; x < width_; ++x) {
-            const int a = o[x][3];
-            if (a == 0) {
-                continue;
+            if (o[x][0] == 0 && o[x][1] == 0 && o[x][2] == 0) {
+                continue; // clear colour -> let the camera show through
             }
+            const int a = o[x][3] != 0 ? o[x][3] : 255; // opaque if alpha absent
             const int ia = 255 - a;
             d[x][0] = static_cast<uchar>((o[x][0] * a + d[x][0] * ia) / 255);
             d[x][1] = static_cast<uchar>((o[x][1] * a + d[x][1] * ia) / 255);
