@@ -56,19 +56,32 @@ std::vector<fs::path> mediaRoots() {
     return roots;
 }
 
+// Returns true for the RTSS shader library files the generator pulls in by bare
+// name: the shared header OgreUnifiedShader.h and the SGXLib_*/RTSLib_*/FFPLib_*
+// sources (.glsl/.glsles/.cg/.hlsl). Matching on these names rather than on a
+// bare extension keeps us from registering unrelated sample-shader directories.
+bool isRtShaderLibFile(const std::string& name) {
+    static const char* kPrefixes[] = {"OgreUnifiedShader", "SGXLib", "RTSLib",
+                                      "FFPLib"};
+    for (const char* prefix : kPrefixes) {
+        if (name.rfind(prefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Find the directories that must be registered so the RTSS can resolve the
-// shader includes it pulls in by bare name (OgreUnifiedShader.h plus the
-// SGXLib_*/RTSLib_*/FFPLib_* GLSL sources). Each media root is walked
-// recursively and we collect every directory that holds OgreUnifiedShader.h or
-// a *.glsl source. We deliberately register these leaf directories rather than
-// their RTShaderLib parent: OGRE scans every registered location for material
-// scripts recursively and *generates* every material it finds, so registering
-// the parent would drag in RTShaderLib/materials (shipped sample materials we
-// do not need) and crash during resource-group initialisation if any include
-// is missing. The include layout also varies across OGRE versions -- flat in
-// the RTShaderLib root on current master, under a GLSL/ subdir on older
-// releases -- and a recursive search handles both. Returns the directories
-// found under the first media root that actually contains OgreUnifiedShader.h.
+// shader includes it pulls in by bare name. Each media root is walked
+// recursively and we collect every directory that holds an RTSS shader library
+// file (see isRtShaderLibFile). The layout varies across OGRE versions -- the
+// shared header may sit next to the SGXLib sources or in a sibling directory
+// (e.g. OGRE 14's Media/Main/OgreUnifiedShader.h alongside Media/RTShaderLib),
+// and on older releases the sources live under a GLSL/ subdir -- so a recursive
+// search is the only layout-agnostic way to locate them. We register these leaf
+// directories directly (non-recursively) so the RTSS resolves the includes by
+// bare name. Returns the directories found under the first media root that
+// actually ships OgreUnifiedShader.h.
 std::vector<std::string> findShaderIncludeDirs() {
     std::set<fs::path> best;
     for (const fs::path& root : mediaRoots()) {
@@ -86,14 +99,13 @@ std::vector<std::string> findShaderIncludeDirs() {
             if (!it->is_regular_file(fec)) {
                 continue;
             }
-            const fs::path& p = it->path();
-            const std::string name = p.filename().string();
-            const std::string ext = p.extension().string();
+            const std::string name = it->path().filename().string();
+            if (!isRtShaderLibFile(name)) {
+                continue;
+            }
+            dirs.insert(it->path().parent_path());
             if (name == "OgreUnifiedShader.h") {
-                dirs.insert(p.parent_path());
                 haveHeader = true;
-            } else if (ext == ".glsl" || ext == ".glsles") {
-                dirs.insert(p.parent_path());
             }
         }
         if (haveHeader) {
@@ -102,7 +114,7 @@ std::vector<std::string> findShaderIncludeDirs() {
             break;
         }
         if (best.empty()) {
-            best = std::move(dirs); // remember GLSL dirs as a partial fallback
+            best = std::move(dirs); // remember partial matches as a fallback
         }
     }
 
