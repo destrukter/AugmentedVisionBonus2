@@ -84,6 +84,9 @@ void CameraWindow::drawUi() {
     ImGui::Text("Camera: %s", camOpen ? "connected" : "no device");
     ImGui::SameLine();
     ImGui::Text("| Tracked images: %zu", store_->imageIds().size());
+    ImGui::SameLine();
+    ImGui::Text("| Frame: %s (avg %.1f)",
+                lastGrabHadFrame_ ? "yes" : "none", lastFrameBrightness_);
 
     bool preview = previewWhenUntracked_;
     if (ImGui::Checkbox("Preview model when untracked", &preview)) {
@@ -117,6 +120,14 @@ void CameraWindow::updateTrackingAndRender() {
 
     cv::Mat frame;
     const bool haveFrame = capture_ && capture_->grab(frame);
+
+    // Diagnostic: record the grabbed frame's average brightness so a black feed
+    // can be attributed to the capture (avg ~0) vs the display path.
+    lastGrabHadFrame_ = haveFrame;
+    if (haveFrame) {
+        const cv::Scalar m = cv::mean(frame);
+        lastFrameBrightness_ = (m[0] + m[1] + m[2]) / 3.0;
+    }
 
     renderer_->beginFrame(haveFrame ? frame : cv::Mat());
 
