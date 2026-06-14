@@ -77,3 +77,11 @@ cmake --build build -j
 Dependencies (OpenCV, OGRE, Eigen3, Assimp, SDL2) are resolved with `find_package`.
 Dear ImGui is fetched automatically via CMake `FetchContent`. See
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
+
+The RTSS (auto-shader) pipeline needs OGRE's `RTShaderLib` media (e.g.
+`OgreUnifiedShader.h`). The build records OGRE's media directory automatically;
+if it lives somewhere unusual, point the app at it at runtime:
+
+```bash
+OGRE_MEDIA_DIR=/path/to/OGRE/Media ./build/AugmentedVisionBonus2
+```
