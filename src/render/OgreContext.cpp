@@ -1,8 +1,8 @@
 #include "render/OgreContext.h"
 
-// #include <OgreRoot.h>
-// #include <OgreSceneManager.h>
-// #include <OgreConfigFile.h>
+#include <OgreRoot.h>
+#include <OgreSceneManager.h>
+#include <OgreConfigFile.h>
 
 namespace avb {
 
