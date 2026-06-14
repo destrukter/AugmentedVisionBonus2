@@ -2,6 +2,8 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <set>
+#include <string>
 #include <system_error>
 #include <vector>
 
@@ -23,54 +25,105 @@ namespace {
 
 namespace fs = std::filesystem;
 
-// Locate the OGRE "RTShaderLib" media directory that ships the RTSS shader
-// includes (OgreUnifiedShader.h and friends). The shader generator cannot
-// compile the GPU programs it builds for our materials without these, so the
-// directory must be registered as a resource location up front. Returns the
-// path to the RTShaderLib dir, or an empty string if none was found.
-std::string findRtShaderLib() {
-    std::vector<fs::path> candidates;
-    const auto addMedia = [&](const fs::path& media) {
-        candidates.emplace_back(media / "RTShaderLib");
-    };
-
+// Candidate OGRE media roots to search for the RTSS shader library, in
+// priority order: an explicit OGRE_MEDIA_DIR, the directory recorded at build
+// time, then the usual system install locations (including versioned dirs such
+// as /usr/share/OGRE-13.6/Media).
+std::vector<fs::path> mediaRoots() {
+    std::vector<fs::path> roots;
     if (const char* env = std::getenv("OGRE_MEDIA_DIR")) {
-        addMedia(env);
+        roots.emplace_back(env);
     }
 #ifdef AVB_OGRE_MEDIA_DIR
-    addMedia(AVB_OGRE_MEDIA_DIR);
+    roots.emplace_back(AVB_OGRE_MEDIA_DIR);
 #endif
-    addMedia("/usr/share/OGRE/Media");
-    addMedia("/usr/local/share/OGRE/Media");
+    roots.emplace_back("/usr/share/OGRE/Media");
+    roots.emplace_back("/usr/local/share/OGRE/Media");
 
-    // Distros install versioned media dirs, e.g. /usr/share/OGRE-13.6/Media.
-    for (const char* root : {"/usr/share", "/usr/local/share"}) {
+    for (const char* base : {"/usr/share", "/usr/local/share"}) {
+        std::error_code ec;
+        if (!fs::is_directory(base, ec)) {
+            continue;
+        }
+        for (const auto& entry : fs::directory_iterator(base, ec)) {
+            if (entry.is_directory(ec) &&
+                entry.path().filename().string().rfind("OGRE", 0) == 0) {
+                roots.emplace_back(entry.path() / "Media");
+                roots.emplace_back(entry.path());
+            }
+        }
+    }
+    return roots;
+}
+
+// Returns true for the RTSS shader library files the generator pulls in by bare
+// name: the shared header OgreUnifiedShader.h and the SGXLib_*/RTSLib_*/FFPLib_*
+// sources (.glsl/.glsles/.cg/.hlsl). Matching on these names rather than on a
+// bare extension keeps us from registering unrelated sample-shader directories.
+bool isRtShaderLibFile(const std::string& name) {
+    static const char* kPrefixes[] = {"OgreUnifiedShader", "SGXLib", "RTSLib",
+                                      "FFPLib"};
+    for (const char* prefix : kPrefixes) {
+        if (name.rfind(prefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Find the directories that must be registered so the RTSS can resolve the
+// shader includes it pulls in by bare name. Each media root is walked
+// recursively and we collect every directory that holds an RTSS shader library
+// file (see isRtShaderLibFile). The layout varies across OGRE versions -- the
+// shared header may sit next to the SGXLib sources or in a sibling directory
+// (e.g. OGRE 14's Media/Main/OgreUnifiedShader.h alongside Media/RTShaderLib),
+// and on older releases the sources live under a GLSL/ subdir -- so a recursive
+// search is the only layout-agnostic way to locate them. We register these leaf
+// directories directly (non-recursively) so the RTSS resolves the includes by
+// bare name. Returns the directories found under the first media root that
+// actually ships OgreUnifiedShader.h.
+std::vector<std::string> findShaderIncludeDirs() {
+    std::set<fs::path> best;
+    for (const fs::path& root : mediaRoots()) {
         std::error_code ec;
         if (!fs::is_directory(root, ec)) {
             continue;
         }
-        for (const auto& entry : fs::directory_iterator(root, ec)) {
-            if (entry.is_directory(ec) &&
-                entry.path().filename().string().rfind("OGRE", 0) == 0) {
-                addMedia(entry.path() / "Media");
+        std::set<fs::path> dirs;
+        bool haveHeader = false;
+        for (auto it = fs::recursive_directory_iterator(
+                 root, fs::directory_options::skip_permission_denied, ec);
+             !ec && it != fs::recursive_directory_iterator();
+             it.increment(ec)) {
+            std::error_code fec;
+            if (!it->is_regular_file(fec)) {
+                continue;
             }
+            const std::string name = it->path().filename().string();
+            if (!isRtShaderLibFile(name)) {
+                continue;
+            }
+            dirs.insert(it->path().parent_path());
+            if (name == "OgreUnifiedShader.h") {
+                haveHeader = true;
+            }
+        }
+        if (haveHeader) {
+            // First root that actually ships the header wins.
+            best = std::move(dirs);
+            break;
+        }
+        if (best.empty()) {
+            best = std::move(dirs); // remember partial matches as a fallback
         }
     }
 
-    std::string fallback;
-    for (const fs::path& dir : candidates) {
-        std::error_code ec;
-        // Prefer a directory that demonstrably contains the RTSS includes,
-        // whether they sit at the root or under a language subdir (GLSL).
-        if (fs::exists(dir / "OgreUnifiedShader.h", ec) ||
-            fs::exists(dir / "GLSL" / "OgreUnifiedShader.h", ec)) {
-            return dir.string();
-        }
-        if (fallback.empty() && fs::is_directory(dir, ec)) {
-            fallback = dir.string();
-        }
+    std::vector<std::string> out;
+    out.reserve(best.size());
+    for (const fs::path& dir : best) {
+        out.push_back(dir.string());
     }
-    return fallback;
+    return out;
 }
 
 } // namespace
@@ -152,33 +205,15 @@ void OgreContext::loadResources() {
     auto& rgm = Ogre::ResourceGroupManager::getSingleton();
 
     // RTSS shader library: required for the shader generator to compile the
-    // techniques it builds for our materials (e.g. avb/DefaultLit). The shader
-    // generator includes its headers by bare name (#include
-    // "OgreUnifiedShader.h"), and OGRE resolves a bare name only against the
-    // *immediate* contents of a registered location -- a file in a subdir is
-    // indexed under its subdir path (e.g. "GLSL/OgreUnifiedShader.h"), which a
-    // bare lookup never matches. The include also lives in different places
-    // across OGRE versions: flat in the RTShaderLib root (current master) or
-    // under a language subdir such as GLSL (older releases). So we register the
-    // root *and* each immediate subdirectory as its own location. We do not try
-    // to filter out RTShaderLib/materials: OGRE always scans a location for
-    // scripts recursively regardless of the recursive flag, so the only way to
-    // keep its sample materials (which use the rtshader_system keyword) from
-    // erroring out is to initialise the RTSS before the resource groups are
-    // parsed -- which initialize() now does.
-    const std::string rtShaderLib = findRtShaderLib();
-    if (!rtShaderLib.empty()) {
-        const fs::path base(rtShaderLib);
-        std::vector<fs::path> shaderDirs = {base};
-        std::error_code ec;
-        for (const auto& entry : fs::directory_iterator(base, ec)) {
-            if (entry.is_directory(ec)) {
-                shaderDirs.emplace_back(entry.path());
-            }
-        }
-        for (const fs::path& dir : shaderDirs) {
+    // techniques it builds for our materials (e.g. avb/DefaultLit). Register the
+    // leaf directories that hold the shader includes (see findShaderIncludeDirs)
+    // non-recursively so the RTSS resolves them by bare name, without dragging
+    // in OGRE's shipped sample materials.
+    const std::vector<std::string> shaderDirs = findShaderIncludeDirs();
+    if (!shaderDirs.empty()) {
+        for (const std::string& dir : shaderDirs) {
             rgm.addResourceLocation(
-                dir.string(), "FileSystem",
+                dir, "FileSystem",
                 Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME,
                 /*recursive*/ false);
         }
