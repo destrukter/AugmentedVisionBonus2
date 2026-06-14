@@ -2,14 +2,28 @@
 
 #include <utility>
 
+#include <imgui.h>
+
 #include "render/SceneRenderer.h"
 #include "storage/DataStore.h"
 #include "vision/CameraCapture.h"
 #include "vision/ImageTracker.h"
 
-// #include <imgui.h>
-
 namespace avb {
+
+namespace {
+
+void beginFullWindow(const char* name) {
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::Begin(name, nullptr,
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+}
+
+} // namespace
 
 CameraWindow::CameraWindow(std::shared_ptr<DataStore> store,
                            std::shared_ptr<CameraCapture> capture,
@@ -34,9 +48,26 @@ void CameraWindow::refreshTrackedImages() {
 
 void CameraWindow::drawUi() {
     updateTrackingAndRender();
-    // ImGui::Begin("Camera");
-    // ImGui::Image(renderer_->compositedTexture(), available_size);
-    // ImGui::End();
+
+    beginFullWindow("Camera");
+
+    const bool camOpen = capture_ && capture_->isOpen();
+    ImGui::Text("Camera: %s", camOpen ? "connected" : "not available");
+    ImGui::Text("Tracked images: %zu", store_->imageIds().size());
+    ImGui::Separator();
+
+    void* tex = renderer_ ? renderer_->compositedTexture() : nullptr;
+    if (tex) {
+        // Composited feed + rendered models (filled in by SceneRenderer).
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        ImGui::Image(reinterpret_cast<ImTextureID>(tex), avail);
+    } else {
+        ImGui::TextDisabled(
+            "Live AR view will appear here once the OGRE SceneRenderer is "
+            "wired up.");
+    }
+
+    ImGui::End();
 }
 
 void CameraWindow::updateTrackingAndRender() {

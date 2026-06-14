@@ -55,6 +55,7 @@ private:
     std::unique_ptr<CameraWindow> cameraWindow_;
 
     bool running_{false};
+    bool sdlInitialized_{false};
 };
 
 } // namespace avb

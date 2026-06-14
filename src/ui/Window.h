@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 struct SDL_Window;
@@ -51,6 +52,8 @@ private:
     SDL_Window* sdlWindow_{nullptr};
     void* glContext_{nullptr};      // SDL_GLContext (opaque here)
     ImGuiContext* imguiContext_{nullptr};
+    std::uint32_t windowId_{0};     // SDL window id, used to route events
+    std::string iniFilename_;       // per-window imgui layout file (keeps lifetime)
     bool open_{false};
 };
 
