@@ -91,6 +91,11 @@ bool Window::initialize() {
     return true;
 }
 
+void Window::makeContextCurrent() {
+    SDL_GL_MakeCurrent(sdlWindow_, glContext_);
+    ImGui::SetCurrentContext(imguiContext_);
+}
+
 void Window::handleEvent(const SDL_Event& event) {
     const std::uint32_t id = eventWindowId(event);
     if (id != 0 && id != windowId_) {

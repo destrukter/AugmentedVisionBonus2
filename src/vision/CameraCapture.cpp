@@ -1,19 +1,22 @@
 #include "vision/CameraCapture.h"
 
+#include <opencv2/core/utils/logger.hpp>
+
 namespace avb {
 
 bool CameraCapture::open(int deviceIndex) {
-    // On Linux, OpenCV's default backend for a camera index is GStreamer, which
-    // emits a noisy one-time "Cannot query video position" warning: a live
-    // camera feed has no seekable duration to query. Prefer the V4L2 backend,
-    // which talks to the device directly and avoids that warning, and fall back
-    // to OpenCV's auto-selected backend if V4L2 is unavailable.
-#if defined(__linux__)
-    if (capture_.open(deviceIndex, cv::CAP_V4L2)) {
-        return true;
-    }
-#endif
-    return capture_.open(deviceIndex, cv::CAP_ANY);
+    // Opening a live camera makes OpenCV's default backend (GStreamer on Linux)
+    // log a harmless one-time "Cannot query video position" warning, because a
+    // live feed has no seekable duration. We keep that default backend -- it is
+    // the one that actually delivers frames reliably across setups -- and only
+    // silence the noise by raising OpenCV's log level to ERROR while opening,
+    // restoring the previous level afterwards so real errors still surface.
+    namespace logging = cv::utils::logging;
+    const logging::LogLevel previous = logging::getLogLevel();
+    logging::setLogLevel(logging::LOG_LEVEL_ERROR);
+    const bool opened = capture_.open(deviceIndex);
+    logging::setLogLevel(previous);
+    return opened;
 }
 
 bool CameraCapture::isOpen() const {

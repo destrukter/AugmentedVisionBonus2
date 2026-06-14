@@ -44,6 +44,13 @@ protected:
     /// ImGui new-frame and render calls.
     virtual void drawUi() = 0;
 
+    /// Re-asserts this window's GL and ImGui context as current. drawUi() runs
+    /// with them already current, but a subclass that calls into another library
+    /// which switches the GL context (e.g. OGRE rendering to an off-screen
+    /// target) must call this afterwards before issuing further GL commands, or
+    /// those commands land in the wrong context.
+    void makeContextCurrent();
+
     std::string title_;
     int width_;
     int height_;
