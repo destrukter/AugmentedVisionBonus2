@@ -33,6 +33,14 @@ target_include_directories(AugmentedVisionBonus2 PRIVATE
     ${OGRE_INCLUDE_DIRS}
 )
 
+# Hand the build-time OGRE media directory to the app so it can locate the RTSS
+# shader library (RTShaderLib) without relying on OGRE_MEDIA_DIR being set at
+# runtime. OGRE's CMake config exports OGRE_MEDIA_DIR.
+if(OGRE_MEDIA_DIR)
+    target_compile_definitions(AugmentedVisionBonus2 PRIVATE
+        AVB_OGRE_MEDIA_DIR="${OGRE_MEDIA_DIR}")
+endif()
+
 target_link_libraries(AugmentedVisionBonus2 PRIVATE
     avb_storage
     Eigen3::Eigen

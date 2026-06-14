@@ -42,6 +42,9 @@ private:
     /// Loads the first available GL render-system plugin from common locations
     /// (override with the OGRE_PLUGIN_DIR environment variable).
     bool loadRenderSystem();
+    /// Registers the OGRE RTShaderLib media (so the RTSS can find its shader
+    /// includes) plus any locations listed in assets/resources.cfg.
+    void loadResources();
     bool initShaderSystem();
 
     std::unique_ptr<Ogre::Root> root_;
