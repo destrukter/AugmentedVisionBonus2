@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 
 #include "ui/Window.h"
@@ -30,16 +31,28 @@ public:
     /// Call after images are uploaded/removed.
     void refreshTrackedImages();
 
+    /// When true (default), if no image is tracked but assignments exist, the
+    /// first assigned model is rendered at a fixed pose in front of the camera
+    /// so the 3D pipeline is visible without a working tracker/camera.
+    void setPreviewWhenUntracked(bool enabled) { previewWhenUntracked_ = enabled; }
+
 protected:
     void drawUi() override;
 
 private:
     void updateTrackingAndRender();
+    void uploadCompositedToTexture();  // composited image -> this window's GL texture
 
     std::shared_ptr<DataStore> store_;
     std::shared_ptr<CameraCapture> capture_;
     std::shared_ptr<ImageTracker> tracker_;
     std::shared_ptr<SceneRenderer> renderer_;
+
+    unsigned int glTexture_{0};     // GL texture id owned by this window's context
+    int texWidth_{0};
+    int texHeight_{0};
+    std::size_t lastImageCount_{0}; // triggers tracker refresh on change
+    bool previewWhenUntracked_{true};
 };
 
 } // namespace avb

@@ -28,7 +28,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(OpenCV REQUIRED)        # camera capture + image tracking
 find_package(Eigen3 REQUIRED)        # math (poses, matrices)
 find_package(assimp REQUIRED)        # FBX model loading
-find_package(OGRE REQUIRED)          # 3D rendering
+find_package(OGRE REQUIRED COMPONENTS RTShaderSystem)  # 3D rendering + auto shaders
 find_package(SDL2 REQUIRED)          # OS windows + input + GL context
 find_package(OpenGL REQUIRED)        # GL calls in the ImGui render path
 

@@ -42,7 +42,7 @@ bool Application::initialize() {
     }
     modelLoader_ = std::make_shared<ModelLoader>(*ogre_);
     renderer_ = std::make_shared<SceneRenderer>(ogre_, modelLoader_, store_);
-    if (!renderer_->initialize()) {
+    if (!renderer_->initialize(1280, 720)) {
         return false;
     }
     capture_ = std::make_shared<CameraCapture>();
