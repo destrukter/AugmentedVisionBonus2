@@ -10,7 +10,7 @@
 #include "vision/CameraCapture.h"
 #include "vision/ImageTracker.h"
 
-// #include <SDL.h>
+#include <SDL.h>
 
 namespace avb {
 
@@ -18,7 +18,19 @@ Application::Application() = default;
 Application::~Application() { shutdown(); }
 
 bool Application::initialize() {
-    // TODO: SDL_Init(SDL_INIT_VIDEO); configure GL attributes.
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
+        SDL_Log("SDL_Init failed: %s", SDL_GetError());
+        return false;
+    }
+    sdlInitialized_ = true;
+
+    // Request an OpenGL 3.0 core context (matches ImGui's "#version 130").
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
     // Backend store shared by every window.
     store_ = std::make_shared<DataStore>();
@@ -64,18 +76,27 @@ int Application::run() {
         // The app exits once the user has closed all three windows.
         running_ = uploadWindow_->isOpen() || configureWindow_->isOpen() ||
                    cameraWindow_->isOpen();
+
+        // Cap the loop (~60 fps) so idle windows don't busy-spin the CPU.
+        SDL_Delay(16);
     }
     return 0;
 }
 
 void Application::pumpEvents() {
-    // TODO:
-    //   SDL_Event e;
-    //   while (SDL_PollEvent(&e)) {
-    //       uploadWindow_->handleEvent(e);
-    //       configureWindow_->handleEvent(e);
-    //       cameraWindow_->handleEvent(e);
-    //   }
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_QUIT) {
+            uploadWindow_->requestClose();
+            configureWindow_->requestClose();
+            cameraWindow_->requestClose();
+            continue;
+        }
+        // Each window ignores events that target a different window id.
+        uploadWindow_->handleEvent(e);
+        configureWindow_->handleEvent(e);
+        cameraWindow_->handleEvent(e);
+    }
 }
 
 void Application::renderAll() {
@@ -85,11 +106,15 @@ void Application::renderAll() {
 }
 
 void Application::shutdown() {
+    // Destroy windows (and their GL/ImGui contexts) before tearing down SDL.
     cameraWindow_.reset();
     configureWindow_.reset();
     uploadWindow_.reset();
     renderer_.reset();
-    // TODO: SDL_Quit();
+    if (sdlInitialized_) {
+        SDL_Quit();
+        sdlInitialized_ = false;
+    }
     running_ = false;
 }
 

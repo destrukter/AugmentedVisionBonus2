@@ -30,6 +30,7 @@ find_package(Eigen3 REQUIRED)        # math (poses, matrices)
 find_package(assimp REQUIRED)        # FBX model loading
 find_package(OGRE REQUIRED)          # 3D rendering
 find_package(SDL2 REQUIRED)          # OS windows + input + GL context
+find_package(OpenGL REQUIRED)        # GL calls in the ImGui render path
 
 # Dear ImGui is header/source only and not always packaged: fetch it.
 include(FetchContent)

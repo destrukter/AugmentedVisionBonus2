@@ -2,11 +2,27 @@
 
 #include <utility>
 
+#include <imgui.h>
+
 #include "storage/DataStore.h"
 
-// #include <imgui.h>
-
 namespace avb {
+
+namespace {
+
+// Makes the next ImGui window fill the whole OS window (each OS window hosts a
+// single top-level panel).
+void beginFullWindow(const char* name) {
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::Begin(name, nullptr,
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+}
+
+} // namespace
 
 UploadWindow::UploadWindow(std::shared_ptr<DataStore> store,
                            ConfigureCallback onConfigure)
@@ -15,49 +31,101 @@ UploadWindow::UploadWindow(std::shared_ptr<DataStore> store,
       onConfigure_(std::move(onConfigure)) {}
 
 void UploadWindow::drawUi() {
-    // ImGui::Begin("Upload");
+    beginFullWindow("Upload");
     drawUploadSection();
-    // ImGui::Separator();
+    ImGui::Separator();
     drawAssignmentSection();
-    // ImGui::End();
+    ImGui::End();
 }
 
 void UploadWindow::drawUploadSection() {
-    // Pseudocode for the intended ImGui interactions:
-    //
-    // if (ImGui::Button("Upload image...")) {
-    //     std::string path = openFileDialog({"png", "jpg", "jpeg", "bmp"});
-    //     if (!path.empty()) store_->addImage(path);
-    // }
-    // ImGui::SameLine();
-    // if (ImGui::Button("Upload FBX model...")) {
-    //     std::string path = openFileDialog({"fbx"});
-    //     if (!path.empty()) store_->addModel(path);
-    // }
-    //
-    // Then list store_->imageIds() and store_->modelIds() as selectable rows,
-    // updating selectedImage_ / selectedModel_.
+    ImGui::TextUnformatted("Upload assets");
+
+    ImGui::InputTextWithHint("##imgpath", "path to image (png/jpg/...)",
+                             imagePathBuf_, sizeof(imagePathBuf_));
+    ImGui::SameLine();
+    if (ImGui::Button("Add image") && imagePathBuf_[0] != '\0') {
+        store_->addImage(imagePathBuf_);
+        imagePathBuf_[0] = '\0';
+    }
+
+    ImGui::InputTextWithHint("##fbxpath", "path to FBX model",
+                             modelPathBuf_, sizeof(modelPathBuf_));
+    ImGui::SameLine();
+    if (ImGui::Button("Add FBX model") && modelPathBuf_[0] != '\0') {
+        store_->addModel(modelPathBuf_);
+        modelPathBuf_[0] = '\0';
+    }
+
+    ImGui::Spacing();
+    ImGui::Columns(2, "assets");
+
+    ImGui::TextDisabled("Images");
+    for (const Id id : store_->imageIds()) {
+        const ImageAsset* img = store_->image(id);
+        if (!img) {
+            continue;
+        }
+        if (ImGui::Selectable(img->name.c_str(), selectedImage_ == id)) {
+            selectedImage_ = id;
+        }
+    }
+
+    ImGui::NextColumn();
+
+    ImGui::TextDisabled("FBX models");
+    for (const Id id : store_->modelIds()) {
+        const ModelAsset* model = store_->model(id);
+        if (!model) {
+            continue;
+        }
+        if (ImGui::Selectable(model->name.c_str(), selectedModel_ == id)) {
+            selectedModel_ = id;
+        }
+    }
+
+    ImGui::Columns(1);
 }
 
 void UploadWindow::drawAssignmentSection() {
-    // Pseudocode for the assignment interactions:
-    //
-    // Assign the currently selected model to the currently selected image:
-    //   if (ImGui::Button("Assign selected model -> selected image")) {
-    //       store_->assign(selectedModel_, selectedImage_);
-    //   }
-    //
-    // For the selected image, list its assignments. Each row offers Configure
-    // and Revert; one model can appear under several images at once:
-    //   for (Id aid : store_->assignmentsForImage(selectedImage_)) {
-    //       const Assignment* a = store_->assignment(aid);
-    //       const ModelAsset* m = store_->model(a->modelId);
-    //       ImGui::Text("%s", m ? m->name.c_str() : "<missing>");
-    //       ImGui::SameLine();
-    //       if (ImGui::Button("Configure")) onConfigure_(aid);  // -> Configure window
-    //       ImGui::SameLine();
-    //       if (ImGui::Button("Revert"))   store_->unassign(aid);
-    //   }
+    ImGui::TextUnformatted("Assignments");
+
+    const bool canAssign =
+        selectedImage_ != kInvalidId && selectedModel_ != kInvalidId;
+    ImGui::BeginDisabled(!canAssign);
+    if (ImGui::Button("Assign selected model -> selected image")) {
+        // One model can be assigned to many images; assign() is idempotent per
+        // (model, image) pair.
+        store_->assign(selectedModel_, selectedImage_);
+    }
+    ImGui::EndDisabled();
+
+    if (selectedImage_ == kInvalidId) {
+        ImGui::TextDisabled("Select an image to see its assigned models.");
+        return;
+    }
+
+    const ImageAsset* img = store_->image(selectedImage_);
+    ImGui::Text("Models on '%s':", img ? img->name.c_str() : "<image>");
+
+    for (const Id aid : store_->assignmentsForImage(selectedImage_)) {
+        const Assignment* a = store_->assignment(aid);
+        if (!a) {
+            continue;
+        }
+        const ModelAsset* model = store_->model(a->modelId);
+        ImGui::PushID(static_cast<int>(aid));
+        ImGui::BulletText("%s", model ? model->name.c_str() : "<missing>");
+        ImGui::SameLine();
+        if (ImGui::Button("Configure")) {
+            onConfigure_(aid); // hand off to the Configure window
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Revert")) {
+            store_->unassign(aid);
+        }
+        ImGui::PopID();
+    }
 }
 
 } // namespace avb

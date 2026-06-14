@@ -39,5 +39,6 @@ target_link_libraries(AugmentedVisionBonus2 PRIVATE
     assimp::assimp
     OgreMain
     SDL2::SDL2
+    OpenGL::GL
     imgui
 )
