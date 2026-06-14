@@ -136,16 +136,43 @@ void Window::renderFrame() {
 
     ImGui::Render();
 
-    // Short-lived diagnostic: confirm the context is actually ours and that
-    // ImGui produced geometry. Logs only the first few frames per window.
+#ifndef GL_FRAMEBUFFER_BINDING
+#define GL_FRAMEBUFFER_BINDING 0x8CA6
+#endif
+#ifndef GL_FRAMEBUFFER
+#define GL_FRAMEBUFFER 0x8D40
+#endif
+
+    // Inspect GL state left by drawUi(). The Camera window drives an OGRE
+    // off-screen render mid-frame; if OGRE leaves a framebuffer bound (or a
+    // scissor enabled) in this context, the window's own clear + ImGui draw
+    // would land in OGRE's render target and the window is presented blank.
+    GLint boundFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFbo);
+    const GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+
+    // Defensive reset so the final draw always targets this window.
+    using BindFramebufferFn = void (*)(GLenum, GLuint);
+    static auto bindFramebuffer = reinterpret_cast<BindFramebufferFn>(
+        SDL_GL_GetProcAddress("glBindFramebuffer"));
+    if (bindFramebuffer) {
+        bindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+    glDisable(GL_SCISSOR_TEST);
+
+    // Short-lived diagnostic: confirm the context is ours, ImGui produced
+    // geometry, and report any framebuffer/scissor OGRE left bound. Logs only
+    // the first few frames per window.
     if (diagFramesLogged_ < 3) {
         ++diagFramesLogged_;
         const bool contextIsCurrent =
             SDL_GL_GetCurrentContext() == static_cast<SDL_GLContext>(glContext_);
         const ImDrawData* dd = ImGui::GetDrawData();
-        SDL_Log("[diag] '%s' makeCurrent=%d ctxCurrent=%d cmdLists=%d vtx=%d",
+        SDL_Log("[diag] '%s' makeCurrent=%d ctxCurrent=%d cmdLists=%d vtx=%d "
+                "boundFbo=%d scissor=%d",
                 title_.c_str(), makeCurrentResult, contextIsCurrent ? 1 : 0,
-                dd ? dd->CmdListsCount : -1, dd ? dd->TotalVtxCount : -1);
+                dd ? dd->CmdListsCount : -1, dd ? dd->TotalVtxCount : -1,
+                static_cast<int>(boundFbo), scissorEnabled ? 1 : 0);
     }
 
     const ImGuiIO& io = ImGui::GetIO();
