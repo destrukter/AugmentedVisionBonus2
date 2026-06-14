@@ -60,8 +60,10 @@ std::string findRtShaderLib() {
     std::string fallback;
     for (const fs::path& dir : candidates) {
         std::error_code ec;
-        // Prefer a directory that demonstrably contains the RTSS includes.
-        if (fs::exists(dir / "GLSL" / "OgreUnifiedShader.h", ec)) {
+        // Prefer a directory that demonstrably contains the RTSS includes,
+        // whether they sit at the root or under a language subdir (GLSL).
+        if (fs::exists(dir / "OgreUnifiedShader.h", ec) ||
+            fs::exists(dir / "GLSL" / "OgreUnifiedShader.h", ec)) {
             return dir.string();
         }
         if (fallback.empty() && fs::is_directory(dir, ec)) {
@@ -150,15 +152,35 @@ void OgreContext::loadResources() {
     auto& rgm = Ogre::ResourceGroupManager::getSingleton();
 
     // RTSS shader library: required for the shader generator to compile the
-    // techniques it builds for our materials (e.g. avb/DefaultLit). Registered
-    // recursively into the internal group OGRE itself looks these includes up
-    // in, so the layout works across OGRE versions.
+    // techniques it builds for our materials (e.g. avb/DefaultLit). The shader
+    // generator includes its headers by bare name (#include
+    // "OgreUnifiedShader.h"), so every directory that holds those headers must
+    // be a resource location in its own right. A single *recursive*
+    // registration of the RTShaderLib root would index the headers under their
+    // subdir path (e.g. "GLSL/OgreUnifiedShader.h") and the bare lookup would
+    // fail -- so we register the root and each shader-language subdir
+    // non-recursively instead, mirroring OGRE's own resources.cfg. We
+    // deliberately skip RTShaderLib/materials: it ships sample scripts using the
+    // rtshader_system keyword, which is only valid once the RTSS is initialised
+    // (after resource groups are parsed), so registering it just produces parse
+    // errors and we don't need those samples.
     const std::string rtShaderLib = findRtShaderLib();
     if (!rtShaderLib.empty()) {
-        rgm.addResourceLocation(
-            rtShaderLib, "FileSystem",
-            Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME,
-            /*recursive*/ true);
+        const fs::path base(rtShaderLib);
+        std::vector<fs::path> shaderDirs = {base};
+        for (const char* sub : {"GLSL", "GLSL120", "GLSLES", "GLSLES100",
+                                "GLSLES300", "HLSL_Cg", "Cg", "HLSL"}) {
+            shaderDirs.emplace_back(base / sub);
+        }
+        std::error_code ec;
+        for (const fs::path& dir : shaderDirs) {
+            if (fs::is_directory(dir, ec)) {
+                rgm.addResourceLocation(
+                    dir.string(), "FileSystem",
+                    Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME,
+                    /*recursive*/ false);
+            }
+        }
     } else {
         Ogre::LogManager::getSingleton().logMessage(
             "OgreContext: could not locate the OGRE RTShaderLib media; set the "
