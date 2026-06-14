@@ -154,32 +154,33 @@ void OgreContext::loadResources() {
     // RTSS shader library: required for the shader generator to compile the
     // techniques it builds for our materials (e.g. avb/DefaultLit). The shader
     // generator includes its headers by bare name (#include
-    // "OgreUnifiedShader.h"), so every directory that holds those headers must
-    // be a resource location in its own right. A single *recursive*
-    // registration of the RTShaderLib root would index the headers under their
-    // subdir path (e.g. "GLSL/OgreUnifiedShader.h") and the bare lookup would
-    // fail -- so we register the root and each shader-language subdir
-    // non-recursively instead, mirroring OGRE's own resources.cfg. We
-    // deliberately skip RTShaderLib/materials: it ships sample scripts using the
-    // rtshader_system keyword, which is only valid once the RTSS is initialised
-    // (after resource groups are parsed), so registering it just produces parse
-    // errors and we don't need those samples.
+    // "OgreUnifiedShader.h"), and OGRE resolves a bare name only against the
+    // *immediate* contents of a registered location -- a file in a subdir is
+    // indexed under its subdir path (e.g. "GLSL/OgreUnifiedShader.h"), which a
+    // bare lookup never matches. The include also lives in different places
+    // across OGRE versions: flat in the RTShaderLib root (current master) or
+    // under a language subdir such as GLSL (older releases). So we register the
+    // root *and* each immediate subdirectory as its own location. We do not try
+    // to filter out RTShaderLib/materials: OGRE always scans a location for
+    // scripts recursively regardless of the recursive flag, so the only way to
+    // keep its sample materials (which use the rtshader_system keyword) from
+    // erroring out is to initialise the RTSS before the resource groups are
+    // parsed -- which initialize() now does.
     const std::string rtShaderLib = findRtShaderLib();
     if (!rtShaderLib.empty()) {
         const fs::path base(rtShaderLib);
         std::vector<fs::path> shaderDirs = {base};
-        for (const char* sub : {"GLSL", "GLSL120", "GLSLES", "GLSLES100",
-                                "GLSLES300", "HLSL_Cg", "Cg", "HLSL"}) {
-            shaderDirs.emplace_back(base / sub);
-        }
         std::error_code ec;
-        for (const fs::path& dir : shaderDirs) {
-            if (fs::is_directory(dir, ec)) {
-                rgm.addResourceLocation(
-                    dir.string(), "FileSystem",
-                    Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME,
-                    /*recursive*/ false);
+        for (const auto& entry : fs::directory_iterator(base, ec)) {
+            if (entry.is_directory(ec)) {
+                shaderDirs.emplace_back(entry.path());
             }
+        }
+        for (const fs::path& dir : shaderDirs) {
+            rgm.addResourceLocation(
+                dir.string(), "FileSystem",
+                Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME,
+                /*recursive*/ false);
         }
     } else {
         Ogre::LogManager::getSingleton().logMessage(
@@ -240,14 +241,32 @@ bool OgreContext::initialize() {
 
     sceneManager_ = root_->createSceneManager();
 
-    // Register the RTSS shader library (and any project resources) before the
-    // groups are initialised so the shader generator can find its includes.
+    // Register the RTSS shader library (and any project resources) first so the
+    // shader generator can find its includes. Then initialise the RTSS *before*
+    // parsing resource scripts: the shader library ships sample materials that
+    // use the rtshader_system keyword, which only becomes a recognised script
+    // token once ShaderGenerator::initialize() has registered its translator.
+    // Parsing those scripts beforehand floods the log with "unexpected token
+    // rtshader_system" errors.
     loadResources();
-    Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
-
     if (!initShaderSystem()) {
         Ogre::LogManager::getSingleton().logMessage(
             "OgreContext: RTSS init failed; materials may not render under GL3+");
+    }
+    Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+
+    // Surface a clear diagnostic if the RTSS shader includes are still not
+    // resolvable: shader generation for any material will otherwise abort with
+    // a FileNotFoundException for OgreUnifiedShader.h the moment a model renders.
+    if (!Ogre::ResourceGroupManager::getSingleton().resourceExists(
+            Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME,
+            "OgreUnifiedShader.h")) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "OgreContext: OgreUnifiedShader.h is not resolvable in the internal "
+            "resource group; the RTShaderLib media was not found or is "
+            "incomplete. Set OGRE_MEDIA_DIR to the OGRE Media directory that "
+            "contains RTShaderLib. RTSS shader generation will fail.",
+            Ogre::LML_CRITICAL);
     }
     return true;
 }
