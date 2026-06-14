@@ -53,12 +53,6 @@ private:
     int texHeight_{0};
     std::size_t lastImageCount_{0}; // triggers tracker refresh on change
     bool previewWhenUntracked_{true};
-
-    // Diagnostics: average brightness (0-255) of the last grabbed frame, and
-    // whether the last grab produced a frame at all. Surfaced in the header so a
-    // black feed can be localized to the capture (avg ~0) vs the display path.
-    bool lastGrabHadFrame_{false};
-    double lastFrameBrightness_{0.0};
 };
 
 } // namespace avb
