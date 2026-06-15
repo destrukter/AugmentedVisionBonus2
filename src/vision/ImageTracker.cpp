@@ -152,6 +152,12 @@ std::vector<Detection> ImageTracker::detect(const cv::Mat& frame) {
         // recover the image-plane pose with a planar PnP solver.
         const float w = static_cast<float>(target.sizePx.width);
         const float h = static_cast<float>(target.sizePx.height);
+
+        // Project the template boundary into the frame for a debug outline.
+        const std::vector<cv::Point2f> templateCorners = {
+            {0.0f, 0.0f}, {w, 0.0f}, {w, h}, {0.0f, h}};
+        std::vector<cv::Point2f> frameCorners;
+        cv::perspectiveTransform(templateCorners, frameCorners, H);
         const float planeW = kPlaneWidth;
         const float planeH = w > 0.0f ? kPlaneWidth * (h / w) : kPlaneWidth;
 
@@ -199,6 +205,10 @@ std::vector<Detection> ImageTracker::detect(const cv::Mat& frame) {
         d.poseInCamera = pose;
         d.confidence =
             static_cast<float>(inliers) / static_cast<float>(templatePts.size());
+        for (std::size_t i = 0; i < d.corners.size() && i < frameCorners.size();
+             ++i) {
+            d.corners[i] = frameCorners[i];
+        }
         detections.push_back(d);
     }
 

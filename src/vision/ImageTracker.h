@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <vector>
 
 #include <Eigen/Core>
@@ -16,6 +17,10 @@ struct Detection {
     /// assignment's Transform to place its model.
     Eigen::Matrix4f poseInCamera{Eigen::Matrix4f::Identity()};
     float confidence{0.0f};
+    /// The template's boundary projected into frame pixel coordinates (the four
+    /// corners, clockwise from the top-left). Useful for drawing a debug outline
+    /// around the tracked target.
+    std::array<cv::Point2f, 4> corners{};
 };
 
 /// Detects which uploaded images are visible in the camera feed and estimates
