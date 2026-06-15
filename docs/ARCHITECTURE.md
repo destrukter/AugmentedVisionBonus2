@@ -105,8 +105,11 @@ already CPU-side from OpenCV, so this keeps the pipeline simple and robust.
 3. **Render**: each frame the Camera window grabs a frame, asks `ImageTracker`
    which images are visible, and for each detected image looks up
    `store->assignmentsForImage(imageId)` and renders each model at
-   `detection.poseInCamera * assignment.transform.toMatrix()`. When nothing is
-   tracked yet (the tracker is still a stub) but assignments exist, the window
+   `detection.poseInCamera * assignment.transform.toMatrix()`. `ImageTracker`
+   matches ORB features against each uploaded image's decoded pixels (loaded via
+   `DataStore::loadImagePixels` on upload), estimates the image-plane pose with
+   homography + planar PnP, and converts it from the OpenCV camera frame to the
+   OGRE camera frame. When nothing is tracked but assignments exist, the window
    renders the first assigned model at a fixed preview pose so the 3D pipeline is
    visible; toggle this with the "Preview model when untracked" checkbox.
 

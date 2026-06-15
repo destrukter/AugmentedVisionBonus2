@@ -45,7 +45,9 @@ void UploadWindow::drawUploadSection() {
                              imagePathBuf_, sizeof(imagePathBuf_));
     ImGui::SameLine();
     if (ImGui::Button("Add image") && imagePathBuf_[0] != '\0') {
-        store_->addImage(imagePathBuf_);
+        const Id id = store_->addImage(imagePathBuf_);
+        // Decode now so the tracker has a template to match against.
+        store_->loadImagePixels(id);
         imagePathBuf_[0] = '\0';
     }
 
