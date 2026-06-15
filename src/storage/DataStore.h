@@ -28,6 +28,12 @@ public:
     /// Registers an image file. `name` defaults to the file name when empty.
     /// Pixel data is not decoded here (see loadImagePixels()).
     Id addImage(const std::string& filePath, const std::string& name = "");
+
+    /// Decodes the image file into `ImageAsset::pixels` (BGR) so the tracker has
+    /// a template to match against. No-op if the id is unknown or pixels are
+    /// already loaded; returns false if the id is unknown or decoding failed.
+    bool loadImagePixels(Id imageId);
+
     bool removeImage(Id imageId);
     const ImageAsset* image(Id imageId) const;
     std::vector<Id> imageIds() const;

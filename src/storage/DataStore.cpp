@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include <opencv2/imgcodecs.hpp>
+
 namespace avb {
 
 namespace {
@@ -21,6 +23,22 @@ Id DataStore::addImage(const std::string& filePath, const std::string& name) {
     const Id id = asset.id;
     images_.emplace(id, std::move(asset));
     return id;
+}
+
+bool DataStore::loadImagePixels(Id imageId) {
+    const auto it = images_.find(imageId);
+    if (it == images_.end()) {
+        return false;
+    }
+    if (!it->second.pixels.empty()) {
+        return true; // already decoded
+    }
+    cv::Mat pixels = cv::imread(it->second.filePath, cv::IMREAD_COLOR);
+    if (pixels.empty()) {
+        return false; // missing file or unsupported format
+    }
+    it->second.pixels = std::move(pixels);
+    return true;
 }
 
 bool DataStore::removeImage(Id imageId) {
