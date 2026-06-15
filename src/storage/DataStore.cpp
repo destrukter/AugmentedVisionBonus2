@@ -39,6 +39,15 @@ const ImageAsset* DataStore::image(Id imageId) const {
     return it == images_.end() ? nullptr : &it->second;
 }
 
+bool DataStore::setImagePixels(Id imageId, const cv::Mat& pixels) {
+    const auto it = images_.find(imageId);
+    if (it == images_.end()) {
+        return false;
+    }
+    it->second.pixels = pixels;
+    return true;
+}
+
 std::vector<Id> DataStore::imageIds() const {
     std::vector<Id> ids;
     ids.reserve(images_.size());

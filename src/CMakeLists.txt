@@ -12,6 +12,18 @@ target_link_libraries(avb_storage
 )
 target_include_directories(avb_storage PUBLIC ${OpenCV_INCLUDE_DIRS})
 
+# Vision (OpenCV) is a standalone library so the tracker can be unit-tested
+# without a GUI, GPU or camera.
+add_library(avb_vision
+    vision/CameraCapture.cpp
+    vision/ImageTracker.cpp
+)
+target_include_directories(avb_vision PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(avb_vision PUBLIC avb_storage Eigen3::Eigen ${OpenCV_LIBS})
+
 # Main application executable.
 add_executable(AugmentedVisionBonus2
     main.cpp
@@ -23,8 +35,6 @@ add_executable(AugmentedVisionBonus2
     render/OgreContext.cpp
     render/ModelLoader.cpp
     render/SceneRenderer.cpp
-    vision/CameraCapture.cpp
-    vision/ImageTracker.cpp
 )
 
 target_include_directories(AugmentedVisionBonus2 PRIVATE
@@ -35,6 +45,7 @@ target_include_directories(AugmentedVisionBonus2 PRIVATE
 
 target_link_libraries(AugmentedVisionBonus2 PRIVATE
     avb_storage
+    avb_vision
     Eigen3::Eigen
     ${OpenCV_LIBS}
     assimp::assimp

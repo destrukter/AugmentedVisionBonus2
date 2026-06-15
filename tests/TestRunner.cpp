@@ -2,10 +2,12 @@
 
 void run_datastore_tests();
 void run_transform_tests();
+void run_imagetracker_tests();
 
 int main() {
     run_transform_tests();
     run_datastore_tests();
+    run_imagetracker_tests();
 
     const int failures = avbtest::failures();
     if (failures == 0) {

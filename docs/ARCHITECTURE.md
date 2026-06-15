@@ -82,12 +82,18 @@ renderer reads the RTT back to a `cv::Mat` and the Camera window uploads that to
 a GL texture it owns (`glTexSubImage2D`) for `ImGui::Image`. Camera frames are
 already CPU-side from OpenCV, so this keeps the pipeline simple and robust.
 
-### `src/vision` — OpenCV
+### `src/vision` — OpenCV (built as the `avb_vision` library, unit-tested)
 
 - `CameraCapture` — wraps `cv::VideoCapture`.
-- `ImageTracker` — registers uploaded images as templates and detects them in
-  the feed (ORB features + homography + PnP), returning `Detection{imageId,
-  poseInCamera}`.
+- `ImageTracker` — registers uploaded images as ORB templates and detects them
+  in the feed: ORB features → BFMatcher + Lowe ratio test → `findHomography`
+  (RANSAC) → `solvePnP` on the inliers against the marker plane, returning
+  `Detection{imageId, poseInCamera, confidence}`. The pose is converted from
+  OpenCV camera axes (+Y down, +Z forward) to OGRE axes (+Y up, +Z backward).
+  If no calibration is supplied via `setCameraIntrinsics`, a default pinhole
+  intrinsic (focal ≈ image width, centred principal point) is used. The marker
+  plane spans one "marker width" unit, so pose translation and the configured
+  `Transform` are in those units.
 
 ### `src/core`
 
@@ -114,5 +120,6 @@ already CPU-side from OpenCV, so this keeps the pipeline simple and robust.
 
 - System packages: OpenCV, Eigen3, Assimp, OGRE, SDL2 (`find_package`).
 - Dear ImGui is fetched at configure time via `FetchContent`.
-- `AVB_BUILD_TESTS=ON` (default) builds and registers the storage tests with
-  CTest.
+- `AVB_BUILD_TESTS=ON` (default) builds and registers the storage + vision tests
+  (`DataStore`, `Transform`, `ImageTracker`) with CTest. They are GPU/camera-free
+  and run headless in CI.

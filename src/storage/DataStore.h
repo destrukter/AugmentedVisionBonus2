@@ -26,11 +26,15 @@ public:
 
     // ---- Images -----------------------------------------------------------
     /// Registers an image file. `name` defaults to the file name when empty.
-    /// Pixel data is not decoded here (see loadImagePixels()).
+    /// Pixel data is not decoded here; attach it with setImagePixels().
     Id addImage(const std::string& filePath, const std::string& name = "");
     bool removeImage(Id imageId);
     const ImageAsset* image(Id imageId) const;
     std::vector<Id> imageIds() const;
+
+    /// Attaches decoded pixels to an image (the UI decodes the file on upload so
+    /// the tracker has a template). Returns false if the id is unknown.
+    bool setImagePixels(Id imageId, const cv::Mat& pixels);
 
     // ---- Models -----------------------------------------------------------
     /// Registers an FBX model file. `name` defaults to the file name when empty.

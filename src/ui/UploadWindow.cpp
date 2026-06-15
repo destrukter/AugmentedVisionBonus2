@@ -3,6 +3,7 @@
 #include <utility>
 
 #include <imgui.h>
+#include <opencv2/imgcodecs.hpp>
 
 #include "storage/DataStore.h"
 
@@ -45,7 +46,12 @@ void UploadWindow::drawUploadSection() {
                              imagePathBuf_, sizeof(imagePathBuf_));
     ImGui::SameLine();
     if (ImGui::Button("Add image") && imagePathBuf_[0] != '\0') {
-        store_->addImage(imagePathBuf_);
+        const Id id = store_->addImage(imagePathBuf_);
+        // Decode the file now so the tracker has a template to match against.
+        cv::Mat pixels = cv::imread(imagePathBuf_, cv::IMREAD_COLOR);
+        if (!pixels.empty()) {
+            store_->setImagePixels(id, pixels);
+        }
         imagePathBuf_[0] = '\0';
     }
 
