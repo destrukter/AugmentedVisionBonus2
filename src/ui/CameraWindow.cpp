@@ -1,12 +1,14 @@
 #include "ui/CameraWindow.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <utility>
 #include <vector>
 
 #include <SDL_opengl.h>
 #include <imgui.h>
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include "render/SceneRenderer.h"
 #include "storage/Assets.h"
@@ -34,6 +36,24 @@ Eigen::Matrix4f previewPose() {
     Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
     m(2, 3) = -3.0f; // 3 units in front of the camera
     return m;
+}
+
+// Draws the detected target's quad (and a confidence label) onto a BGR frame.
+void drawTrackingOutline(cv::Mat& frame, const Detection& d) {
+    std::vector<cv::Point> pts;
+    pts.reserve(d.corners.size());
+    for (const cv::Point2f& c : d.corners) {
+        pts.emplace_back(cvRound(c.x), cvRound(c.y));
+    }
+    const cv::Scalar green(0, 255, 0); // BGR
+    cv::polylines(frame, pts, /*isClosed=*/true, green, 2, cv::LINE_AA);
+
+    char label[64];
+    std::snprintf(label, sizeof(label), "#%llu (%.0f%%)",
+                  static_cast<unsigned long long>(d.imageId),
+                  d.confidence * 100.0f);
+    cv::putText(frame, label, pts.front() + cv::Point(0, -6),
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, green, 1, cv::LINE_AA);
 }
 
 } // namespace
@@ -89,6 +109,11 @@ void CameraWindow::drawUi() {
     if (ImGui::Checkbox("Preview model when untracked", &preview)) {
         previewWhenUntracked_ = preview;
     }
+    ImGui::SameLine();
+    bool outline = showTrackingOutline_;
+    if (ImGui::Checkbox("Show tracking outline", &outline)) {
+        showTrackingOutline_ = outline;
+    }
     ImGui::Separator();
 
     if (glTexture_ != 0) {
@@ -122,7 +147,14 @@ void CameraWindow::updateTrackingAndRender() {
 
     int rendered = 0;
     if (tracker_ && haveFrame) {
-        for (const Detection& d : tracker_->detect(frame)) {
+        const std::vector<Detection> detections = tracker_->detect(frame);
+        for (const Detection& d : detections) {
+            // Debug: outline the tracked target on the feed so its detection can
+            // be verified visually. Drawn on `frame`, which SceneRenderer holds a
+            // shallow reference to, so it appears in the composited background.
+            if (showTrackingOutline_) {
+                drawTrackingOutline(frame, d);
+            }
             for (const Id aid : store_->assignmentsForImage(d.imageId)) {
                 const Assignment* a = store_->assignment(aid);
                 if (!a) {

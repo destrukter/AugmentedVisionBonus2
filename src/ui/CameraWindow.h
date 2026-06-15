@@ -53,6 +53,7 @@ private:
     int texHeight_{0};
     std::size_t lastImageCount_{0}; // triggers tracker refresh on change
     bool previewWhenUntracked_{true};
+    bool showTrackingOutline_{true}; // debug rectangle around tracked targets
 };
 
 } // namespace avb
