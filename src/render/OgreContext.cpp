@@ -140,21 +140,40 @@ public:
                                           Ogre::Material* originalMaterial,
                                           unsigned short /*lodIndex*/,
                                           const Ogre::Renderable* /*rend*/) override {
+        Ogre::LogManager::getSingleton().logMessage(
+            "OgreContext::MaterialResolver: handleSchemeNotFound('" + schemeName +
+            "') for material '" + originalMaterial->getName() + "'");
         if (schemeName != Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "OgreContext::MaterialResolver: scheme mismatch (RTSS scheme is '" +
+                Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME + "'), skipping");
             return nullptr;
         }
         if (!gen_->createShaderBasedTechnique(
                 *originalMaterial, Ogre::MaterialManager::DEFAULT_SCHEME_NAME,
                 schemeName)) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "OgreContext::MaterialResolver: createShaderBasedTechnique FAILED for '" +
+                    originalMaterial->getName() + "'",
+                Ogre::LML_CRITICAL);
             return nullptr;
         }
         gen_->validateMaterial(schemeName, originalMaterial->getName(),
                                originalMaterial->getGroup());
         for (Ogre::Technique* tech : originalMaterial->getTechniques()) {
             if (tech->getSchemeName() == schemeName) {
+                Ogre::LogManager::getSingleton().logMessage(
+                    "OgreContext::MaterialResolver: generated technique for '" +
+                    originalMaterial->getName() + "', supported=" +
+                    (tech->isSupported() ? "yes" : "no"));
                 return tech;
             }
         }
+        Ogre::LogManager::getSingleton().logMessage(
+            "OgreContext::MaterialResolver: no technique with scheme '" + schemeName +
+                "' found on '" + originalMaterial->getName() +
+                "' after generation (validateMaterial likely removed it)",
+            Ogre::LML_CRITICAL);
         return nullptr;
     }
 

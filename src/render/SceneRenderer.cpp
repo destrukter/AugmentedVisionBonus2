@@ -133,6 +133,20 @@ void SceneRenderer::showDebugCube() {
     debugNode_->setScale(0.01f, 0.01f, 0.01f);
     debugNode_->setPosition(0.0f, 0.0f, -3.0f);
 
+    // Force the material to compile now (rather than lazily on first render)
+    // so we can report whether it actually ended up with a technique the
+    // active render system can draw - the deciding factor for whether this
+    // cube (or any model using the same style of material) is visible at all.
+    Ogre::MaterialPtr debugMat = Ogre::MaterialManager::getSingleton().getByName(
+        kDebugMaterial, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (debugMat) {
+        debugMat->load();
+        Ogre::LogManager::getSingleton().logMessage(
+            "SceneRenderer: avb/DebugCube supported techniques = " +
+            std::to_string(debugMat->getSupportedTechniques().size()) + " / " +
+            std::to_string(debugMat->getNumTechniques()));
+    }
+
     Ogre::LogManager::getSingleton().logMessage(
         "SceneRenderer: debug cube loaded for startup render verification");
 }
