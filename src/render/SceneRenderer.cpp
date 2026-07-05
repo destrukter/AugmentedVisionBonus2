@@ -18,6 +18,8 @@
 #include <OgreTextureManager.h>
 #include <OgreViewport.h>
 
+#include <RTShaderSystem/OgreShaderGenerator.h>
+
 #include "render/ModelLoader.h"
 #include "render/OgreContext.h"
 #include "storage/DataStore.h"
@@ -80,6 +82,14 @@ bool SceneRenderer::initialize(int width, int height) {
     vp->setBackgroundColour(Ogre::ColourValue(0, 0, 0, 0)); // transparent
     vp->setClearEveryFrame(true);
     vp->setOverlaysEnabled(false);
+    // Route this viewport's material lookups through the RTSS scheme so
+    // OgreContext's scheme-not-found listener generates real GLSL techniques
+    // for our materials. Without this, the render-system-agnostic
+    // fixed-function-style passes (lighting/diffuse/specular, no shader
+    // programs) never get a technique the GL3Plus render system - which has
+    // no fixed-function pipeline - can actually draw, so geometry renders
+    // invisibly.
+    vp->setMaterialScheme(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
     renderTarget_->setAutoUpdated(false);
 
     readback_.assign(static_cast<size_t>(width_) * height_ * 4, 0);
