@@ -15,6 +15,7 @@ class Camera;
 class SceneNode;
 class Light;
 class RenderTexture;
+class RenderWindow;
 } // namespace Ogre
 
 namespace avb {
@@ -53,6 +54,20 @@ public:
     /// problem rather than a tracking or asset problem.
     void showDebugCube();
 
+    /// Opens a plain, real OS window that shows this scene's camera view
+    /// directly through OGRE's own presentation (no off-screen RTT, no CPU
+    /// read-back, no OpenCV compositing, no ImGui texture re-upload). Purely
+    /// a debugging aid: it isolates whether the OGRE scene itself renders
+    /// correctly from whether the Camera window's composite/re-upload
+    /// pipeline is what's hiding something. Call once, after initialize().
+    /// Returns false if the window could not be created.
+    bool showDebugWindow(int width, int height);
+
+    /// Presents one frame of the debug window opened by showDebugWindow().
+    /// No-op if that window was never created. Call once per application
+    /// loop tick, independent of beginFrame()/endFrame().
+    void updateDebugWindow();
+
     void beginFrame(const cv::Mat& cameraFrame);
     /// Places the model for `modelId` at `pose` (a 4x4 camera-space matrix) and
     /// makes it visible. Lazily loads/instantiates the mesh on first use.
@@ -84,6 +99,7 @@ private:
     std::unordered_map<Id, Ogre::SceneNode*> nodes_;
 
     Ogre::SceneNode* debugNode_{nullptr};  // startup sanity-check cube, see showDebugCube()
+    Ogre::RenderWindow* debugWindow_{nullptr};  // raw preview window, see showDebugWindow()
 
     cv::Mat cameraFrame_;            // latest BGR frame (may be empty)
     cv::Mat composited_;             // RGBA output

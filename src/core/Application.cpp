@@ -49,6 +49,10 @@ bool Application::initialize() {
     // pipeline can be sanity-checked in the Camera window on startup, before
     // any image is uploaded, tracked, or model assigned.
     renderer_->showDebugCube();
+    // Debug: a plain OGRE-native window showing the same scene with none of
+    // the Camera window's off-screen-RTT/OpenCV-compositing/ImGui-texture
+    // plumbing in the way, to isolate which side a rendering problem is on.
+    renderer_->showDebugWindow(960, 540);
     capture_ = std::make_shared<CameraCapture>();
     capture_->open(0);
     tracker_ = std::make_shared<ImageTracker>();
@@ -104,6 +108,7 @@ void Application::pumpEvents() {
 }
 
 void Application::renderAll() {
+    renderer_->updateDebugWindow();
     uploadWindow_->renderFrame();
     configureWindow_->renderFrame();
     cameraWindow_->renderFrame();

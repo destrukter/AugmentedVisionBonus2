@@ -13,6 +13,8 @@
 #include <OgreMaterial.h>
 #include <OgreMaterialManager.h>
 #include <OgreRenderTexture.h>
+#include <OgreRenderWindow.h>
+#include <OgreRoot.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
 #include <OgreTechnique.h>
@@ -150,6 +152,39 @@ void SceneRenderer::showDebugCube() {
 
     Ogre::LogManager::getSingleton().logMessage(
         "SceneRenderer: debug cube loaded for startup render verification");
+}
+
+bool SceneRenderer::showDebugWindow(int width, int height) {
+    if (!initialized_ || debugWindow_ || width <= 0 || height <= 0) {
+        return false;
+    }
+    // No "hidden" key -> a real, visible OS window, unlike OgreContext's 1x1
+    // hidden context window. All OGRE-created windows share the same GL
+    // context/object namespace, so this sees the exact same scene (materials,
+    // meshes, the debug cube) as the off-screen RTT with no extra setup.
+    Ogre::NameValuePairList params;
+    debugWindow_ = context_->root()->createRenderWindow(
+        "AVB Debug Render (raw OGRE view, no compositing)", static_cast<unsigned int>(width),
+        static_cast<unsigned int>(height), false, &params);
+    if (!debugWindow_) {
+        return false;
+    }
+    Ogre::Viewport* vp = debugWindow_->addViewport(camera_);
+    vp->setBackgroundColour(Ogre::ColourValue(0.12f, 0.12f, 0.15f, 1.0f));
+    // Same requirement as the off-screen viewport in initialize(): route
+    // lookups through the RTSS scheme or materials render with no shader
+    // under GL3Plus.
+    vp->setMaterialScheme(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
+
+    Ogre::LogManager::getSingleton().logMessage(
+        "SceneRenderer: debug render window opened for raw scene preview");
+    return true;
+}
+
+void SceneRenderer::updateDebugWindow() {
+    if (debugWindow_) {
+        debugWindow_->update();
+    }
 }
 
 void SceneRenderer::beginFrame(const cv::Mat& cameraFrame) {
