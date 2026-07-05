@@ -130,11 +130,27 @@ void SceneRenderer::showDebugCube() {
 
     debugNode_ = worldRoot_->createChildSceneNode("avb_debugNode");
     debugNode_->attachObject(entity);
-    // The prefab cube is 100 units per side; scale to ~1 unit and place it a
-    // few units in front of the camera (which looks down -Z) so it is visible
-    // immediately, before any image is tracked or model uploaded.
-    debugNode_->setScale(0.01f, 0.01f, 0.01f);
+
+    // Don't assume the prefab's raw size (commonly cited as 100 units per
+    // side, but that turned out to put the camera essentially inside the
+    // thing - the debug window showed a huge, extreme-close-up corner of a
+    // single face rather than a whole cube). Measure the entity's actual
+    // local bounding box and scale it to a known ~1 world-unit target
+    // instead, so this is correct regardless of the prefab's real size.
+    const Ogre::Vector3 rawSize = entity->getBoundingBox().getSize();
+    constexpr float kTargetSize = 1.0f;
+    const float sx = rawSize.x > 1e-6f ? kTargetSize / rawSize.x : 1.0f;
+    const float sy = rawSize.y > 1e-6f ? kTargetSize / rawSize.y : 1.0f;
+    const float sz = rawSize.z > 1e-6f ? kTargetSize / rawSize.z : 1.0f;
+    debugNode_->setScale(sx, sy, sz);
+    // A few units in front of the camera (which looks down -Z).
     debugNode_->setPosition(0.0f, 0.0f, -3.0f);
+
+    Ogre::LogManager::getSingleton().logMessage(
+        "SceneRenderer: debug cube raw local size = (" +
+        std::to_string(rawSize.x) + ", " + std::to_string(rawSize.y) + ", " +
+        std::to_string(rawSize.z) + "), scale applied = (" + std::to_string(sx) +
+        ", " + std::to_string(sy) + ", " + std::to_string(sz) + ")");
 
     // Force the material to compile now (rather than lazily on first render)
     // so we can report whether it actually ended up with a technique the
