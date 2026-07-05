@@ -92,6 +92,7 @@ private:
     int width_{0};
     int height_{0};
     bool initialized_{false};
+    bool debugOverlayLogged_{false};  // one-shot RTT pixel-stats diagnostic, see endFrame()
 };
 
 } // namespace avb

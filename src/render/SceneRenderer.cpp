@@ -1,5 +1,6 @@
 #include "render/SceneRenderer.h"
 
+#include <algorithm>
 #include <utility>
 
 #include <opencv2/imgproc.hpp>
@@ -218,6 +219,33 @@ void SceneRenderer::endFrame() {
         pb, Ogre::RenderTarget::FB_AUTO);
 
     cv::Mat overlay(height_, width_, CV_8UC4, readback_.data()); // RGBA
+
+    // One-shot diagnostic: report whether *anything* actually landed in the
+    // RTT this run, and how bright it is. If nonBlackPixels is 0, the debug
+    // cube never reached the render target at all (camera/geometry/depth
+    // problem, upstream of compositing). If it's > 0 but the cube still isn't
+    // visible on screen, the bug is in the composite/texture-upload step
+    // below instead.
+    if (!debugOverlayLogged_ && debugNode_) {
+        debugOverlayLogged_ = true;
+        std::size_t nonBlack = 0;
+        unsigned char maxVal = 0;
+        for (int y = 0; y < height_; ++y) {
+            const cv::Vec4b* row = overlay.ptr<cv::Vec4b>(y);
+            for (int x = 0; x < width_; ++x) {
+                const cv::Vec4b& p = row[x];
+                if (p[0] != 0 || p[1] != 0 || p[2] != 0) {
+                    ++nonBlack;
+                }
+                maxVal = std::max({maxVal, p[0], p[1], p[2], p[3]});
+            }
+        }
+        Ogre::LogManager::getSingleton().logMessage(
+            "SceneRenderer: first-frame RTT overlay stats: nonBlackPixels=" +
+            std::to_string(nonBlack) + "/" +
+            std::to_string(static_cast<std::size_t>(width_) * height_) +
+            " maxChannelValue=" + std::to_string(static_cast<int>(maxVal)));
+    }
 
     // Build the RGBA background from the camera frame (BGR -> RGBA), or black.
     if (composited_.empty() || composited_.rows != height_ ||
