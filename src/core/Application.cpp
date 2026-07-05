@@ -45,6 +45,10 @@ bool Application::initialize() {
     if (!renderer_->initialize(1280, 720)) {
         return false;
     }
+    // Debug: render a built-in cube immediately so the OGRE render/composite
+    // pipeline can be sanity-checked in the Camera window on startup, before
+    // any image is uploaded, tracked, or model assigned.
+    renderer_->showDebugCube();
     capture_ = std::make_shared<CameraCapture>();
     capture_->open(0);
     tracker_ = std::make_shared<ImageTracker>();

@@ -8,9 +8,13 @@
 #include <OgreEntity.h>
 #include <OgreHardwarePixelBuffer.h>
 #include <OgreLight.h>
+#include <OgreLogManager.h>
+#include <OgreMaterial.h>
+#include <OgreMaterialManager.h>
 #include <OgreRenderTexture.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
+#include <OgreTechnique.h>
 #include <OgreTextureManager.h>
 #include <OgreViewport.h>
 
@@ -81,6 +85,46 @@ bool SceneRenderer::initialize(int width, int height) {
     readback_.assign(static_cast<size_t>(width_) * height_ * 4, 0);
     initialized_ = true;
     return true;
+}
+
+void SceneRenderer::showDebugCube() {
+    if (!initialized_ || debugNode_) {
+        return;
+    }
+    Ogre::SceneManager* sm = context_->sceneManager();
+
+    // A small dedicated material so the debug cube is visually distinct from
+    // real models (avb/DefaultLit is owned by ModelLoader).
+    constexpr const char* kDebugMaterial = "avb/DebugCube";
+    auto& mm = Ogre::MaterialManager::getSingleton();
+    if (!mm.getByName(kDebugMaterial,
+                      Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+        Ogre::MaterialPtr mat = mm.create(
+            kDebugMaterial, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(true);
+        pass->setDiffuse(0.9f, 0.25f, 0.2f, 1.0f);
+        pass->setSpecular(0.2f, 0.2f, 0.2f, 1.0f);
+        pass->setShininess(20.0f);
+    }
+
+    // OGRE's built-in cube prefab requires no FBX/Assimp import, so it
+    // exercises the render + composite pipeline without depending on
+    // ModelLoader or any uploaded asset.
+    Ogre::Entity* entity =
+        sm->createEntity("avb_debug_cube", Ogre::SceneManager::PT_CUBE);
+    entity->setMaterialName(kDebugMaterial);
+
+    debugNode_ = worldRoot_->createChildSceneNode("avb_debugNode");
+    debugNode_->attachObject(entity);
+    // The prefab cube is 100 units per side; scale to ~1 unit and place it a
+    // few units in front of the camera (which looks down -Z) so it is visible
+    // immediately, before any image is tracked or model uploaded.
+    debugNode_->setScale(0.01f, 0.01f, 0.01f);
+    debugNode_->setPosition(0.0f, 0.0f, -3.0f);
+
+    Ogre::LogManager::getSingleton().logMessage(
+        "SceneRenderer: debug cube loaded for startup render verification");
 }
 
 void SceneRenderer::beginFrame(const cv::Mat& cameraFrame) {

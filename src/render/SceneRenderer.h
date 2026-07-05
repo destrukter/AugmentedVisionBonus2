@@ -45,6 +45,14 @@ public:
     /// Creates the camera, light and off-screen render target of the given size.
     bool initialize(int width, int height);
 
+    /// Loads a small built-in cube (no FBX/Assimp import needed) and shows it a
+    /// few units in front of the camera. Call once after initialize(). This is
+    /// a startup sanity check for the OGRE + RTT-compositing pipeline: it
+    /// stays visible independent of any uploaded model, image or tracked pose,
+    /// so a black/empty Camera window can be narrowed down to a rendering
+    /// problem rather than a tracking or asset problem.
+    void showDebugCube();
+
     void beginFrame(const cv::Mat& cameraFrame);
     /// Places the model for `modelId` at `pose` (a 4x4 camera-space matrix) and
     /// makes it visible. Lazily loads/instantiates the mesh on first use.
@@ -74,6 +82,8 @@ private:
 
     // modelId -> scene node (created on demand).
     std::unordered_map<Id, Ogre::SceneNode*> nodes_;
+
+    Ogre::SceneNode* debugNode_{nullptr};  // startup sanity-check cube, see showDebugCube()
 
     cv::Mat cameraFrame_;            // latest BGR frame (may be empty)
     cv::Mat composited_;             // RGBA output
