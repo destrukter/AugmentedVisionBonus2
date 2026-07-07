@@ -14,6 +14,7 @@ feed and renders user-assigned 3D (FBX) models on top of them.
 | Computer vision    | OpenCV             |
 | GUI                | Dear ImGui         |
 | Windowing / input  | SDL2               |
+| Native file dialogs | nativefiledialog-extended |
 | Build              | CMake              |
 
 ## The three windows

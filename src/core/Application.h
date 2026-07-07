@@ -56,6 +56,7 @@ private:
 
     bool running_{false};
     bool sdlInitialized_{false};
+    bool nfdInitialized_{false};
 };
 
 } // namespace avb

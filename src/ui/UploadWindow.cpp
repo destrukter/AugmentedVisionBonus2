@@ -1,8 +1,11 @@
 #include "ui/UploadWindow.h"
 
+#include <string>
 #include <utility>
 
+#include <SDL.h>
 #include <imgui.h>
+#include <nfd.h>
 
 #include "storage/DataStore.h"
 
@@ -20,6 +23,24 @@ void beginFullWindow(const char* name) {
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
+}
+
+// Opens a native "Open File" dialog restricted to `filter` (e.g. "png,jpg").
+// Returns the chosen path, or empty if the user cancelled or the dialog
+// failed (logged via SDL so failures aren't silent).
+std::string pickFile(const char* filterName, const char* filterExtensions) {
+    nfdchar_t* path = nullptr;
+    const nfdfilteritem_t filter[1] = {{filterName, filterExtensions}};
+    const nfdresult_t result = NFD_OpenDialog(&path, filter, 1, nullptr);
+    if (result == NFD_OKAY) {
+        std::string picked = path;
+        NFD_FreePath(path);
+        return picked;
+    }
+    if (result == NFD_ERROR) {
+        SDL_Log("NFD_OpenDialog failed: %s", NFD_GetError());
+    }
+    return {}; // NFD_CANCEL, or NFD_ERROR already logged above
 }
 
 } // namespace
@@ -41,22 +62,20 @@ void UploadWindow::drawUi() {
 void UploadWindow::drawUploadSection() {
     ImGui::TextUnformatted("Upload assets");
 
-    ImGui::InputTextWithHint("##imgpath", "path to image (png/jpg/...)",
-                             imagePathBuf_, sizeof(imagePathBuf_));
-    ImGui::SameLine();
-    if (ImGui::Button("Add image") && imagePathBuf_[0] != '\0') {
-        const Id id = store_->addImage(imagePathBuf_);
-        // Decode now so the tracker has a template to match against.
-        store_->loadImagePixels(id);
-        imagePathBuf_[0] = '\0';
+    if (ImGui::Button("Add image...")) {
+        const std::string path = pickFile("Images", "png,jpg,jpeg,bmp");
+        if (!path.empty()) {
+            const Id id = store_->addImage(path);
+            // Decode now so the tracker has a template to match against.
+            store_->loadImagePixels(id);
+        }
     }
-
-    ImGui::InputTextWithHint("##fbxpath", "path to FBX model",
-                             modelPathBuf_, sizeof(modelPathBuf_));
     ImGui::SameLine();
-    if (ImGui::Button("Add FBX model") && modelPathBuf_[0] != '\0') {
-        store_->addModel(modelPathBuf_);
-        modelPathBuf_[0] = '\0';
+    if (ImGui::Button("Add FBX model...")) {
+        const std::string path = pickFile("FBX models", "fbx");
+        if (!path.empty()) {
+            store_->addModel(path);
+        }
     }
 
     ImGui::Spacing();

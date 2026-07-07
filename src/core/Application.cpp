@@ -11,6 +11,7 @@
 #include "vision/ImageTracker.h"
 
 #include <SDL.h>
+#include <nfd.h>
 
 namespace avb {
 
@@ -23,6 +24,12 @@ bool Application::initialize() {
         return false;
     }
     sdlInitialized_ = true;
+
+    if (NFD_Init() != NFD_OKAY) {
+        SDL_Log("NFD_Init failed: %s", NFD_GetError());
+        return false;
+    }
+    nfdInitialized_ = true;
 
     // Request an OpenGL 3.0 context (matches ImGui's "#version 130"). Profile
     // masks (core/compatibility) are only meaningful for GL >= 3.2 - requesting
@@ -132,6 +139,10 @@ void Application::shutdown() {
     configureWindow_.reset();
     uploadWindow_.reset();
     renderer_.reset();
+    if (nfdInitialized_) {
+        NFD_Quit();
+        nfdInitialized_ = false;
+    }
     if (sdlInitialized_) {
         SDL_Quit();
         sdlInitialized_ = false;
