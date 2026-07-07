@@ -16,7 +16,10 @@ target_include_directories(avb_storage PUBLIC ${OpenCV_INCLUDE_DIRS})
 # ImageTracker can be unit-tested without any UI / rendering dependency.
 add_library(avb_vision
     vision/CameraCapture.cpp
+    vision/CaptureWorker.cpp
+    vision/DetectionFilter.cpp
     vision/ImageTracker.cpp
+    vision/TrackingWorker.cpp
 )
 target_include_directories(avb_vision PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(avb_vision
@@ -64,5 +67,6 @@ target_link_libraries(AugmentedVisionBonus2 PRIVATE
     SDL2::SDL2
     OpenGL::GL
     imgui
+    imguizmo
     nfd
 )

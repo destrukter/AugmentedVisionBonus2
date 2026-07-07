@@ -1,5 +1,6 @@
 #include "ui/CameraWindow.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <utility>
@@ -13,8 +14,9 @@
 #include "render/SceneRenderer.h"
 #include "storage/Assets.h"
 #include "storage/DataStore.h"
-#include "vision/CameraCapture.h"
+#include "vision/CaptureWorker.h"
 #include "vision/ImageTracker.h"
+#include "vision/TrackingWorker.h"
 
 namespace avb {
 
@@ -59,12 +61,14 @@ void drawTrackingOutline(cv::Mat& frame, const Detection& d) {
 } // namespace
 
 CameraWindow::CameraWindow(std::shared_ptr<DataStore> store,
-                           std::shared_ptr<CameraCapture> capture,
+                           std::shared_ptr<CaptureWorker> capture,
+                           std::shared_ptr<TrackingWorker> tracking,
                            std::shared_ptr<ImageTracker> tracker,
                            std::shared_ptr<SceneRenderer> renderer)
     : Window("Camera", 1280, 720),
       store_(std::move(store)),
       capture_(std::move(capture)),
+      tracking_(std::move(tracking)),
       tracker_(std::move(tracker)),
       renderer_(std::move(renderer)) {}
 
@@ -87,6 +91,9 @@ void CameraWindow::refreshTrackedImages() {
             tracker_->addTarget(id, img->pixels);
         }
     }
+    if (tracking_) {
+        tracking_->resetFilter();
+    }
 }
 
 void CameraWindow::drawUi() {
@@ -97,10 +104,21 @@ void CameraWindow::drawUi() {
 
     beginFullWindow("Camera");
 
-    const bool camOpen = capture_ && capture_->isOpen();
-    ImGui::Text("Camera: %s", camOpen ? "connected" : "no device");
+    const bool camOpen = capture_ && capture_->cameraOpen();
+    if (camOpen) {
+        ImGui::Text("Camera: connected  |  feed %.0f fps  |  tracking %.0f fps",
+                    capture_->fps(), tracking_ ? tracking_->fps() : 0.0);
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.3f, 1.0f),
+                           "Camera: no device (retrying...)");
+        ImGui::SameLine();
+        if (ImGui::Button("Reconnect") && capture_) {
+            capture_->requestReconnect();
+        }
+    }
     ImGui::SameLine();
-    ImGui::Text("| Tracked images: %zu", store_->imageIds().size());
+    ImGui::Text("| Images: %zu | Tracked now: %d", store_->imageIds().size(),
+                detectionCount_);
 
     bool preview = previewWhenUntracked_;
     if (ImGui::Checkbox("Preview model when untracked", &preview)) {
@@ -113,11 +131,24 @@ void CameraWindow::drawUi() {
     }
     ImGui::Separator();
 
-    if (glTexture_ != 0) {
+    if (glTexture_ != 0 && texWidth_ > 0 && texHeight_ > 0) {
+        // Letterbox: scale the feed to fit the available region while keeping
+        // its aspect ratio, instead of stretching it to the window. The feed
+        // is only ever scaled uniformly for display; tracking always runs on
+        // the raw camera frames, so the window size never affects detection.
         const ImVec2 avail = ImGui::GetContentRegionAvail();
-        ImGui::Image(reinterpret_cast<ImTextureID>(
-                         static_cast<std::uintptr_t>(glTexture_)),
-                     avail);
+        if (avail.x >= 1.0f && avail.y >= 1.0f) {
+            const float scale =
+                std::min(avail.x / static_cast<float>(texWidth_),
+                         avail.y / static_cast<float>(texHeight_));
+            const ImVec2 size(texWidth_ * scale, texHeight_ * scale);
+            const ImVec2 cursor = ImGui::GetCursorPos();
+            ImGui::SetCursorPos(ImVec2(cursor.x + (avail.x - size.x) * 0.5f,
+                                       cursor.y + (avail.y - size.y) * 0.5f));
+            ImGui::Image(reinterpret_cast<ImTextureID>(
+                             static_cast<std::uintptr_t>(glTexture_)),
+                         size);
+        }
     } else {
         ImGui::TextDisabled("No rendered frame yet.");
     }
@@ -131,23 +162,27 @@ void CameraWindow::updateTrackingAndRender() {
     }
 
     // Keep tracker templates in sync with the uploaded image set.
-    const std::size_t count = store_->imageIds().size();
-    if (count != lastImageCount_) {
+    const std::uint64_t revision = store_->imageRevision();
+    if (revision != lastImageRevision_) {
         refreshTrackedImages();
-        lastImageCount_ = count;
+        lastImageRevision_ = revision;
     }
 
+    // Newest frame (our own copy) + newest smoothed detections; neither call
+    // blocks on the camera or on feature matching.
     cv::Mat frame;
-    const bool haveFrame = capture_ && capture_->grab(frame);
+    const bool haveFrame = capture_ && capture_->latestFrame(frame) != 0;
 
     renderer_->beginFrame(haveFrame ? frame : cv::Mat());
 
     int rendered = 0;
-    if (tracker_ && haveFrame) {
-        const std::vector<Detection> detections = tracker_->detect(frame);
+    detectionCount_ = 0;
+    if (tracking_ && haveFrame) {
+        const std::vector<Detection> detections = tracking_->latestDetections();
+        detectionCount_ = static_cast<int>(detections.size());
         for (const Detection& d : detections) {
-            // Debug: outline the tracked target on the feed so its detection can
-            // be verified visually. Drawn on `frame`, which SceneRenderer holds a
+            // Outline the tracked target on the feed so its detection can be
+            // verified visually. Drawn on `frame`, which SceneRenderer holds a
             // shallow reference to, so it appears in the composited background.
             if (showTrackingOutline_) {
                 drawTrackingOutline(frame, d);
@@ -165,7 +200,7 @@ void CameraWindow::updateTrackingAndRender() {
         }
     }
 
-    // Fallback so the 3D pipeline is visible before tracking is implemented.
+    // Fallback so the 3D pipeline is visible without a tracked image.
     if (rendered == 0 && previewWhenUntracked_) {
         const std::vector<Id> assignments = store_->assignmentIds();
         if (!assignments.empty()) {

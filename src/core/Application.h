@@ -10,7 +10,9 @@ class OgreContext;
 class ModelLoader;
 class SceneRenderer;
 class CameraCapture;
+class CaptureWorker;
 class ImageTracker;
+class TrackingWorker;
 class Window;
 class UploadWindow;
 class ConfigureWindow;
@@ -48,6 +50,8 @@ private:
     std::shared_ptr<SceneRenderer> renderer_;
     std::shared_ptr<CameraCapture> capture_;
     std::shared_ptr<ImageTracker> tracker_;
+    std::shared_ptr<CaptureWorker> captureWorker_;    // camera thread
+    std::shared_ptr<TrackingWorker> trackingWorker_;  // detection thread
 
     // Frontend windows.
     std::unique_ptr<UploadWindow> uploadWindow_;

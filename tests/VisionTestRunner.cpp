@@ -1,9 +1,11 @@
 #include "TestMain.h"
 
 void run_imagetracker_tests();
+void run_detectionfilter_tests();
 
 int main() {
     run_imagetracker_tests();
+    run_detectionfilter_tests();
 
     const int failures = avbtest::failures();
     if (failures == 0) {

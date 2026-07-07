@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include "vision/ImageTracker.h"
 
@@ -18,6 +19,20 @@ cv::Mat makeNoiseMarker(int size, uint64_t seed) {
     cv::Mat img(size, size, CV_8UC1);
     cv::RNG rng(seed);
     rng.fill(img, cv::RNG::UNIFORM, 0, 256);
+    return img;
+}
+
+// Like makeNoiseMarker, but with `blockPx`-sized cells instead of per-pixel
+// noise. Per-pixel noise has no structure that survives downscaling (averaging
+// turns it into flat gray), so tests that exercise the tracker's internal
+// frame downscale need features that exist across scales - as in real photos.
+cv::Mat makeBlockNoiseMarker(int size, int blockPx, uint64_t seed) {
+    const int cells = std::max(1, size / blockPx);
+    cv::Mat coarse(cells, cells, CV_8UC1);
+    cv::RNG rng(seed);
+    rng.fill(coarse, cv::RNG::UNIFORM, 0, 256);
+    cv::Mat img;
+    cv::resize(coarse, img, cv::Size(size, size), 0, 0, cv::INTER_NEAREST);
     return img;
 }
 
@@ -66,6 +81,62 @@ static void test_ignores_featureless_target() {
     CHECK(detections.empty());
 }
 
+static void test_detects_marker_under_poor_lighting() {
+    ImageTracker tracker;
+    const cv::Mat marker = makeNoiseMarker(160, 7);
+    tracker.addTarget(5, marker);
+
+    cv::Mat frame = makeFrameWithMarker(marker, 400, 100, 100);
+    // Simulate a dim, low-contrast scene: squash the dynamic range hard
+    // (roughly "marker in a poorly lit room"). The CLAHE preprocessing and
+    // adaptive FAST threshold must still find and place it.
+    cv::Mat dim;
+    frame.convertTo(dim, -1, /*alpha=*/0.25, /*beta=*/12.0);
+
+    const std::vector<Detection> detections = tracker.detect(dim);
+    CHECK(detections.size() == 1);
+    if (detections.empty()) {
+        return;
+    }
+    CHECK(detections[0].imageId == 5);
+    CHECK(std::abs(detections[0].corners[0].x - 100.0f) < 8.0f);
+    CHECK(std::abs(detections[0].corners[0].y - 100.0f) < 8.0f);
+    CHECK(std::abs(detections[0].corners[2].x - 260.0f) < 8.0f);
+    CHECK(std::abs(detections[0].corners[2].y - 260.0f) < 8.0f);
+}
+
+static void test_downscaled_detection_keeps_fullres_coordinates() {
+    // A frame larger than the tracker's internal detection resolution: the
+    // reported corners must still be expressed in full-resolution pixels.
+    ImageTracker tracker;
+    const cv::Mat marker = makeBlockNoiseMarker(240, 8, 9);
+    tracker.addTarget(6, marker);
+
+    const int canvas = 1280; // > internal cap, forces the downscale path
+    cv::Mat frame(canvas, canvas, CV_8UC1, cv::Scalar(128));
+    marker.copyTo(frame(cv::Rect(500, 400, marker.cols, marker.rows)));
+
+    const std::vector<Detection> detections = tracker.detect(frame);
+    CHECK(detections.size() == 1);
+    if (detections.empty()) {
+        return;
+    }
+    // Loose tolerance on purpose: this asserts the *coordinate space* (a
+    // missing scale-back would land corners around (250,200), hundreds of px
+    // off), not the sub-pixel precision of the estimate.
+    CHECK(std::abs(detections[0].corners[0].x - 500.0f) < 40.0f);
+    CHECK(std::abs(detections[0].corners[0].y - 400.0f) < 40.0f);
+    CHECK(std::abs(detections[0].corners[2].x - 740.0f) < 40.0f);
+    CHECK(std::abs(detections[0].corners[2].y - 640.0f) < 40.0f);
+}
+
+static void test_feature_count_reports_trackability() {
+    const cv::Mat rich = makeNoiseMarker(160, 11);
+    const cv::Mat blank(160, 160, CV_8UC1, cv::Scalar(200));
+    CHECK(ImageTracker::countTrackableFeatures(rich) > 100);
+    CHECK(ImageTracker::countTrackableFeatures(blank) == 0);
+}
+
 static void test_add_remove_clear_targets() {
     ImageTracker tracker;
     const cv::Mat markerA = makeNoiseMarker(160, 2);
@@ -99,5 +170,8 @@ static void test_add_remove_clear_targets() {
 void run_imagetracker_tests() {
     test_detects_synthetic_marker();
     test_ignores_featureless_target();
+    test_detects_marker_under_poor_lighting();
+    test_downscaled_detection_keeps_fullres_coordinates();
+    test_feature_count_reports_trackability();
     test_add_remove_clear_targets();
 }

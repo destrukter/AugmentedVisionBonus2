@@ -65,6 +65,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nfd)
 
+# ImGuizmo: interactive translate/rotate/scale gizmo used by the Configure
+# window to manipulate a model's pose with handles instead of numeric input.
+# Pinned to a master commit: the last tagged release (1.83) predates the ImGui
+# 1.89 API removals and no longer compiles against the ImGui fetched above.
+FetchContent_Declare(
+    imguizmo
+    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
+    GIT_TAG        87fb88b13a4f6bb04cd6ecd4e9d1625929935ff1
+)
+FetchContent_MakeAvailable(imguizmo)
+# ImGuizmo's own CMakeLists defines the `imguizmo` target but (outside its
+# standalone example build) leaves the ImGui dependency to the parent project.
+target_link_libraries(imguizmo PUBLIC imgui)
+
 # ----------------------------------------------------------------------------
 # Subdirectories
 # ----------------------------------------------------------------------------

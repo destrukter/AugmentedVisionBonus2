@@ -13,6 +13,7 @@ feed and renders user-assigned 3D (FBX) models on top of them.
 | Model loading      | Assimp (FBX)       |
 | Computer vision    | OpenCV             |
 | GUI                | Dear ImGui         |
+| Pose gizmo         | ImGuizmo           |
 | Windowing / input  | SDL2               |
 | Native file dialogs | nativefiledialog-extended |
 | Build              | CMake              |
@@ -23,21 +24,31 @@ The application opens **three independent OS windows at the same time**, all bac
 by one shared in-memory data store (see `src/storage`).
 
 1. **Upload window** (`src/ui/UploadWindow`)
-   - Upload images and FBX models.
+   - Upload images and FBX models. Uploads are validated immediately and the
+     outcome (success / warning / error) is shown in the window — a broken
+     image or model file is rejected with a reason, and images with too few
+     trackable features get a warning.
    - Assign an FBX model to an image. One model may be assigned to many images.
    - Revert (unassign) and re-assign freely.
    - For every model assigned to an image, a **Configure** button opens that pairing
      in the Configure window.
 
 2. **Configure window** (`src/ui/ConfigureWindow`)
-   - Edit the translation and rotation of an FBX model **relative to its image**
-     through UI controls.
+   - Edit the pose of an FBX model **relative to its image** interactively:
+     a 3D viewport shows the image plane and a translate / rotate / scale
+     gizmo (drag the handles; right-drag orbits the view, wheel zooms).
+   - Numeric fields underneath give exact control over the same values.
    - **Save** writes the pose back into the data store.
 
 3. **Camera window** (`src/ui/CameraWindow`)
-   - Streams the camera feed, tracks the uploaded images (OpenCV).
+   - Streams the camera feed and tracks the uploaded images (OpenCV ORB
+     features; contrast-normalised so tracking survives lighting changes,
+     temporally smoothed so poses don't jitter or flicker).
+   - Capture and tracking run on background threads, so the feed stays smooth
+     regardless of detection cost, and the newest frame is always shown.
    - When a tracked image is detected, the FBX models assigned to it are rendered
-     (OGRE3D) at their configured pose.
+     (OGRE3D) at their configured pose. The feed is displayed letterboxed —
+     resizing the window never warps the image or affects tracking.
 
 ## Backend storage model
 

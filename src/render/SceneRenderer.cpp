@@ -1,6 +1,5 @@
 #include "render/SceneRenderer.h"
 
-#include <algorithm>
 #include <utility>
 
 #include <opencv2/imgproc.hpp>
@@ -9,15 +8,10 @@
 #include <OgreEntity.h>
 #include <OgreHardwarePixelBuffer.h>
 #include <OgreLight.h>
-#include <OgreLogManager.h>
-#include <OgreMaterial.h>
-#include <OgreMaterialManager.h>
 #include <OgreRenderTexture.h>
-#include <OgreRenderWindow.h>
 #include <OgreRoot.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
-#include <OgreTechnique.h>
 #include <OgreTextureManager.h>
 #include <OgreViewport.h>
 
@@ -26,6 +20,7 @@
 #include "render/ModelLoader.h"
 #include "render/OgreContext.h"
 #include "storage/DataStore.h"
+#include "vision/ImageTracker.h"
 
 namespace avb {
 
@@ -37,18 +32,13 @@ SceneRenderer::SceneRenderer(std::shared_ptr<OgreContext> context,
       store_(std::move(store)) {}
 
 SceneRenderer::~SceneRenderer() {
-    if (!rttName_.empty()) {
-        Ogre::TextureManager::getSingleton().remove(
-            rttName_, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    }
+    destroyRenderTarget();
 }
 
 bool SceneRenderer::initialize(int width, int height) {
     if (width <= 0 || height <= 0) {
         return false;
     }
-    width_ = width;
-    height_ = height;
 
     Ogre::SceneManager* sm = context_->sceneManager();
     sm->setAmbientLight(Ogre::ColourValue(0.3f, 0.3f, 0.3f));
@@ -58,6 +48,10 @@ bool SceneRenderer::initialize(int width, int height) {
     camera_ = sm->createCamera("avb_camera");
     camera_->setNearClipDistance(0.05f);
     camera_->setAutoAspectRatio(true);
+    // Must match the vertical FOV the tracker assumes for pose estimation when
+    // no calibrated intrinsics are provided, or rendered models drift off their
+    // tracked image as it moves toward the frame edges.
+    camera_->setFOVy(Ogre::Degree(ImageTracker::kDefaultFovYDeg));
     cameraNode_ = sm->getRootSceneNode()->createChildSceneNode("avb_cameraNode");
     cameraNode_->attachObject(camera_);
     // Camera looks down -Z (OpenGL/OGRE convention); tracker poses are expressed
@@ -70,16 +64,27 @@ bool SceneRenderer::initialize(int width, int height) {
     lightNode->attachObject(light_);
     lightNode->setDirection(Ogre::Vector3(-0.5f, -1.0f, -0.5f).normalisedCopy());
 
-    // Off-screen render target with alpha so models composite over the feed.
+    if (!createRenderTarget(width, height)) {
+        return false;
+    }
+    initialized_ = true;
+    return true;
+}
+
+bool SceneRenderer::createRenderTarget(int width, int height) {
+    destroyRenderTarget();
+
     rttName_ = "avb_rtt";
     Ogre::TexturePtr rtt = Ogre::TextureManager::getSingleton().createManual(
         rttName_, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
-        Ogre::TEX_TYPE_2D, static_cast<unsigned int>(width_),
-        static_cast<unsigned int>(height_), 0, Ogre::PF_R8G8B8A8,
+        Ogre::TEX_TYPE_2D, static_cast<unsigned int>(width),
+        static_cast<unsigned int>(height), 0, Ogre::PF_R8G8B8A8,
         Ogre::TU_RENDERTARGET);
     if (!rtt) {
         return false;
     }
+    width_ = width;
+    height_ = height;
     renderTarget_ = rtt->getBuffer()->getRenderTarget();
     Ogre::Viewport* vp = renderTarget_->addViewport(camera_);
     vp->setBackgroundColour(Ogre::ColourValue(0, 0, 0, 0)); // transparent
@@ -96,118 +101,34 @@ bool SceneRenderer::initialize(int width, int height) {
     renderTarget_->setAutoUpdated(false);
 
     readback_.assign(static_cast<size_t>(width_) * height_ * 4, 0);
-    initialized_ = true;
     return true;
 }
 
-void SceneRenderer::showDebugCube() {
-    if (!initialized_ || debugNode_) {
+void SceneRenderer::destroyRenderTarget() {
+    if (rttName_.empty()) {
         return;
     }
-    Ogre::SceneManager* sm = context_->sceneManager();
-
-    // A small dedicated material so the debug cube is visually distinct from
-    // real models (avb/DefaultLit is owned by ModelLoader).
-    constexpr const char* kDebugMaterial = "avb/DebugCube";
-    auto& mm = Ogre::MaterialManager::getSingleton();
-    if (!mm.getByName(kDebugMaterial,
-                      Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
-        Ogre::MaterialPtr mat = mm.create(
-            kDebugMaterial, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-        Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
-        pass->setLightingEnabled(true);
-        pass->setDiffuse(0.9f, 0.25f, 0.2f, 1.0f);
-        pass->setSpecular(0.2f, 0.2f, 0.2f, 1.0f);
-        pass->setShininess(20.0f);
-    }
-
-    // OGRE's built-in cube prefab requires no FBX/Assimp import, so it
-    // exercises the render + composite pipeline without depending on
-    // ModelLoader or any uploaded asset.
-    Ogre::Entity* entity =
-        sm->createEntity("avb_debug_cube", Ogre::SceneManager::PT_CUBE);
-    entity->setMaterialName(kDebugMaterial);
-
-    debugNode_ = worldRoot_->createChildSceneNode("avb_debugNode");
-    debugNode_->attachObject(entity);
-
-    // Don't assume the prefab's raw size (commonly cited as 100 units per
-    // side, but that turned out to put the camera essentially inside the
-    // thing - the debug window showed a huge, extreme-close-up corner of a
-    // single face rather than a whole cube). Measure the entity's actual
-    // local bounding box and scale it to a known ~1 world-unit target
-    // instead, so this is correct regardless of the prefab's real size.
-    const Ogre::Vector3 rawSize = entity->getBoundingBox().getSize();
-    constexpr float kTargetSize = 1.0f;
-    const float sx = rawSize.x > 1e-6f ? kTargetSize / rawSize.x : 1.0f;
-    const float sy = rawSize.y > 1e-6f ? kTargetSize / rawSize.y : 1.0f;
-    const float sz = rawSize.z > 1e-6f ? kTargetSize / rawSize.z : 1.0f;
-    debugNode_->setScale(sx, sy, sz);
-    // A few units in front of the camera (which looks down -Z).
-    debugNode_->setPosition(0.0f, 0.0f, -3.0f);
-
-    Ogre::LogManager::getSingleton().logMessage(
-        "SceneRenderer: debug cube raw local size = (" +
-        std::to_string(rawSize.x) + ", " + std::to_string(rawSize.y) + ", " +
-        std::to_string(rawSize.z) + "), scale applied = (" + std::to_string(sx) +
-        ", " + std::to_string(sy) + ", " + std::to_string(sz) + ")");
-
-    // Force the material to compile now (rather than lazily on first render)
-    // so we can report whether it actually ended up with a technique the
-    // active render system can draw - the deciding factor for whether this
-    // cube (or any model using the same style of material) is visible at all.
-    Ogre::MaterialPtr debugMat = Ogre::MaterialManager::getSingleton().getByName(
-        kDebugMaterial, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    if (debugMat) {
-        debugMat->load();
-        Ogre::LogManager::getSingleton().logMessage(
-            "SceneRenderer: avb/DebugCube supported techniques = " +
-            std::to_string(debugMat->getSupportedTechniques().size()) + " / " +
-            std::to_string(debugMat->getNumTechniques()));
-    }
-
-    Ogre::LogManager::getSingleton().logMessage(
-        "SceneRenderer: debug cube loaded for startup render verification");
-}
-
-bool SceneRenderer::showDebugWindow(int width, int height) {
-    if (!initialized_ || debugWindow_ || width <= 0 || height <= 0) {
-        return false;
-    }
-    // No "hidden" key -> a real, visible OS window, unlike OgreContext's 1x1
-    // hidden context window. All OGRE-created windows share the same GL
-    // context/object namespace, so this sees the exact same scene (materials,
-    // meshes, the debug cube) as the off-screen RTT with no extra setup.
-    Ogre::NameValuePairList params;
-    debugWindow_ = context_->root()->createRenderWindow(
-        "AVB Debug Render (raw OGRE view, no compositing)", static_cast<unsigned int>(width),
-        static_cast<unsigned int>(height), false, &params);
-    if (!debugWindow_) {
-        return false;
-    }
-    Ogre::Viewport* vp = debugWindow_->addViewport(camera_);
-    vp->setBackgroundColour(Ogre::ColourValue(0.12f, 0.12f, 0.15f, 1.0f));
-    // Same requirement as the off-screen viewport in initialize(): route
-    // lookups through the RTSS scheme or materials render with no shader
-    // under GL3Plus.
-    vp->setMaterialScheme(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
-
-    Ogre::LogManager::getSingleton().logMessage(
-        "SceneRenderer: debug render window opened for raw scene preview");
-    return true;
-}
-
-void SceneRenderer::updateDebugWindow() {
-    if (debugWindow_) {
-        debugWindow_->update();
-    }
+    Ogre::TextureManager::getSingleton().remove(
+        rttName_, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    renderTarget_ = nullptr;
+    rttName_.clear();
 }
 
 void SceneRenderer::beginFrame(const cv::Mat& cameraFrame) {
     cameraFrame_ = cameraFrame; // shallow ref; copied during compositing
+    // Track at the camera's native resolution: sizing the render target to the
+    // frame keeps the OGRE projection aligned with the tracker's intrinsics
+    // (which are derived from the frame size) and removes the per-frame
+    // cv::resize of the feed. Camera resolutions change at most once, on the
+    // first delivered frame.
+    if (initialized_ && !cameraFrame.empty() &&
+        (cameraFrame.cols != width_ || cameraFrame.rows != height_)) {
+        createRenderTarget(cameraFrame.cols, cameraFrame.rows);
+    }
     for (auto& [id, node] : nodes_) {
         node->setVisible(false);
     }
+    visibleModels_ = 0;
 }
 
 Ogre::SceneNode* SceneRenderer::ensureNode(Id modelId) {
@@ -252,12 +173,30 @@ void SceneRenderer::drawModel(Id modelId, const Eigen::Matrix4f& pose) {
     node->setOrientation(Ogre::Quaternion(r));
     node->setScale(sx, sy, sz);
     node->setVisible(true);
+    ++visibleModels_;
 }
 
 void SceneRenderer::endFrame() {
     if (!initialized_) {
         return;
     }
+
+    // Build the RGBA background from the camera frame (BGR -> RGBA), or black.
+    // beginFrame() sized the render target to the frame, so no resize is needed.
+    if (composited_.empty() || composited_.rows != height_ ||
+        composited_.cols != width_) {
+        composited_.create(height_, width_, CV_8UC4);
+    }
+    if (cameraFrame_.empty()) {
+        composited_.setTo(cv::Scalar(0, 0, 0, 255));
+    } else {
+        cv::cvtColor(cameraFrame_, composited_, cv::COLOR_BGR2RGBA);
+    }
+
+    if (visibleModels_ == 0 || !renderTarget_) {
+        return; // nothing rendered: skip the OGRE pass and GPU readback entirely
+    }
+
     renderTarget_->update();
 
     // Read the rendered RGBA overlay back to the CPU.
@@ -269,51 +208,7 @@ void SceneRenderer::endFrame() {
                   static_cast<unsigned int>(height_)),
         pb, Ogre::RenderTarget::FB_AUTO);
 
-    cv::Mat overlay(height_, width_, CV_8UC4, readback_.data()); // RGBA
-
-    // One-shot diagnostic: report whether *anything* actually landed in the
-    // RTT this run, and how bright it is. If nonBlackPixels is 0, the debug
-    // cube never reached the render target at all (camera/geometry/depth
-    // problem, upstream of compositing). If it's > 0 but the cube still isn't
-    // visible on screen, the bug is in the composite/texture-upload step
-    // below instead.
-    if (!debugOverlayLogged_ && debugNode_) {
-        debugOverlayLogged_ = true;
-        std::size_t nonBlack = 0;
-        unsigned char maxVal = 0;
-        for (int y = 0; y < height_; ++y) {
-            const cv::Vec4b* row = overlay.ptr<cv::Vec4b>(y);
-            for (int x = 0; x < width_; ++x) {
-                const cv::Vec4b& p = row[x];
-                if (p[0] != 0 || p[1] != 0 || p[2] != 0) {
-                    ++nonBlack;
-                }
-                maxVal = std::max({maxVal, p[0], p[1], p[2], p[3]});
-            }
-        }
-        Ogre::LogManager::getSingleton().logMessage(
-            "SceneRenderer: first-frame RTT overlay stats: nonBlackPixels=" +
-            std::to_string(nonBlack) + "/" +
-            std::to_string(static_cast<std::size_t>(width_) * height_) +
-            " maxChannelValue=" + std::to_string(static_cast<int>(maxVal)));
-    }
-
-    // Build the RGBA background from the camera frame (BGR -> RGBA), or black.
-    if (composited_.empty() || composited_.rows != height_ ||
-        composited_.cols != width_) {
-        composited_.create(height_, width_, CV_8UC4);
-    }
-    if (cameraFrame_.empty()) {
-        composited_.setTo(cv::Scalar(0, 0, 0, 255));
-    } else {
-        cv::Mat resized;
-        if (cameraFrame_.cols != width_ || cameraFrame_.rows != height_) {
-            cv::resize(cameraFrame_, resized, cv::Size(width_, height_));
-        } else {
-            resized = cameraFrame_;
-        }
-        cv::cvtColor(resized, composited_, cv::COLOR_BGR2RGBA);
-    }
+    const cv::Mat overlay(height_, width_, CV_8UC4, readback_.data()); // RGBA
 
     // Composite the rendered overlay over the camera background.
     //
@@ -325,22 +220,21 @@ void SceneRenderer::endFrame() {
     // camera frame and blank the feed entirely. Treating pure-black overlay
     // pixels as "nothing drawn here" keeps the camera visible wherever no model
     // was rendered, regardless of how the driver reports alpha; rendered model
-    // pixels are lit and therefore non-black.
-    for (int y = 0; y < height_; ++y) {
-        const cv::Vec4b* o = overlay.ptr<cv::Vec4b>(y);
-        cv::Vec4b* d = composited_.ptr<cv::Vec4b>(y);
-        for (int x = 0; x < width_; ++x) {
-            if (o[x][0] == 0 && o[x][1] == 0 && o[x][2] == 0) {
-                continue; // clear colour -> let the camera show through
-            }
-            const int a = o[x][3] != 0 ? o[x][3] : 255; // opaque if alpha absent
-            const int ia = 255 - a;
-            d[x][0] = static_cast<uchar>((o[x][0] * a + d[x][0] * ia) / 255);
-            d[x][1] = static_cast<uchar>((o[x][1] * a + d[x][1] * ia) / 255);
-            d[x][2] = static_cast<uchar>((o[x][2] * a + d[x][2] * ia) / 255);
-            d[x][3] = 255;
-        }
+    // pixels are lit and therefore non-black. Models are opaque, so a masked
+    // copy replaces the old per-pixel alpha blend (SIMD via OpenCV instead of
+    // a scalar loop over every pixel).
+    cv::Mat clearMask; // 255 where the overlay is pure black in RGB (any alpha)
+    cv::inRange(overlay, cv::Scalar(0, 0, 0, 0), cv::Scalar(0, 0, 0, 255),
+                clearMask);
+    cv::bitwise_not(clearMask, drawnMask_);
+    overlay.copyTo(composited_, drawnMask_);
+    // The overlay's alpha is driver-dependent; force the output opaque so the
+    // display texture never blends against the UI background.
+    if (solidAlpha_.size() != composited_.size()) {
+        solidAlpha_.create(composited_.size(), CV_8UC1);
+        solidAlpha_.setTo(255);
     }
+    cv::insertChannel(solidAlpha_, composited_, 3);
 }
 
 } // namespace avb

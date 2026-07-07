@@ -14,6 +14,7 @@ add_test(NAME avb_storage_tests COMMAND avb_storage_tests)
 add_executable(avb_vision_tests
     VisionTestRunner.cpp
     ImageTrackerTests.cpp
+    DetectionFilterTests.cpp
 )
 target_link_libraries(avb_vision_tests PRIVATE avb_vision)
 

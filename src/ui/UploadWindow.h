@@ -32,12 +32,23 @@ private:
     void drawUploadSection();      ///< Buttons to import images / FBX models.
     void drawAssignmentSection();  ///< Image+model matrix with assign/revert.
 
+    void uploadImage(const std::string& path);
+    void uploadModel(const std::string& path);
+
+    /// Sets the status line shown under the upload buttons.
+    enum class StatusKind { Success, Warning, Error };
+    void setStatus(StatusKind kind, std::string message);
+
     std::shared_ptr<DataStore> store_;
     ConfigureCallback onConfigure_;
 
     // Transient UI selection state.
     Id selectedImage_{kInvalidId};
     Id selectedModel_{kInvalidId};
+
+    // Upload feedback (validation success/failure of the last upload).
+    std::string statusMessage_;
+    StatusKind statusKind_{StatusKind::Success};
 
     // Optional pasted-path entry; left empty, "Add..." opens a native file
     // dialog instead.

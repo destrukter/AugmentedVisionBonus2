@@ -22,6 +22,23 @@ bool CameraCapture::open(int deviceIndex) {
     if (!opened) {
         opened = capture_.open(deviceIndex, cv::CAP_ANY);
     }
+    if (opened) {
+        // Low-latency configuration; each is best-effort (set() returning
+        // false just keeps the device default).
+        //
+        // MJPG: uncompressed YUYV tops out at ~5-10 fps at 720p on USB2
+        // webcams because of bus bandwidth; MJPEG reaches the sensor's full
+        // frame rate.
+        capture_.set(cv::CAP_PROP_FOURCC,
+                     cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+        capture_.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
+        capture_.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+        capture_.set(cv::CAP_PROP_FPS, 30);
+        // Keep the driver queue at a single frame so a slow consumer sees the
+        // newest frame instead of an ever-growing backlog (the classic
+        // "camera feed is seconds behind" lag).
+        capture_.set(cv::CAP_PROP_BUFFERSIZE, 1);
+    }
     logging::setLogLevel(previous);
     return opened;
 }

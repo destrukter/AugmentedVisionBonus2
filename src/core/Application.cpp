@@ -8,7 +8,9 @@
 #include "ui/ConfigureWindow.h"
 #include "ui/UploadWindow.h"
 #include "vision/CameraCapture.h"
+#include "vision/CaptureWorker.h"
 #include "vision/ImageTracker.h"
+#include "vision/TrackingWorker.h"
 
 #include <SDL.h>
 #include <nfd.h>
@@ -60,17 +62,15 @@ bool Application::initialize() {
     if (!renderer_->initialize(1280, 720)) {
         return false;
     }
-    // Debug: render a built-in cube immediately so the OGRE render/composite
-    // pipeline can be sanity-checked in the Camera window on startup, before
-    // any image is uploaded, tracked, or model assigned.
-    renderer_->showDebugCube();
-    // Debug: a plain OGRE-native window showing the same scene with none of
-    // the Camera window's off-screen-RTT/OpenCV-compositing/ImGui-texture
-    // plumbing in the way, to isolate which side a rendering problem is on.
-    renderer_->showDebugWindow(960, 540);
+    // Camera frames and detection run on background threads so the UI never
+    // blocks on the camera or on feature matching; the capture worker also
+    // opens the device (and keeps retrying if none is attached yet).
     capture_ = std::make_shared<CameraCapture>();
-    capture_->open(0);
     tracker_ = std::make_shared<ImageTracker>();
+    captureWorker_ = std::make_shared<CaptureWorker>(capture_, /*deviceIndex=*/0);
+    trackingWorker_ = std::make_shared<TrackingWorker>(captureWorker_, tracker_);
+    captureWorker_->start();
+    trackingWorker_->start();
 
     // Frontend windows. The Upload window's "Configure" button routes the
     // chosen assignment into the Configure window.
@@ -79,8 +79,8 @@ bool Application::initialize() {
         store_, [this](Id assignmentId) {
             configureWindow_->openAssignment(assignmentId);
         });
-    cameraWindow_ =
-        std::make_unique<CameraWindow>(store_, capture_, tracker_, renderer_);
+    cameraWindow_ = std::make_unique<CameraWindow>(
+        store_, captureWorker_, trackingWorker_, tracker_, renderer_);
 
     if (!uploadWindow_->initialize() || !configureWindow_->initialize() ||
         !cameraWindow_->initialize()) {
@@ -92,7 +92,15 @@ bool Application::initialize() {
 }
 
 int Application::run() {
+    // Pace the loop to ~60 fps by sleeping only for the time the frame left
+    // over. The previous fixed SDL_Delay(16) came *on top of* the frame's own
+    // cost, capping the UI well below 60 fps and adding a frame of latency.
+    constexpr double kTargetFrameMs = 1000.0 / 60.0;
+    const double msPerCount = 1000.0 / SDL_GetPerformanceFrequency();
+
     while (running_) {
+        const Uint64 frameStart = SDL_GetPerformanceCounter();
+
         pumpEvents();
         renderAll();
 
@@ -100,8 +108,11 @@ int Application::run() {
         running_ = uploadWindow_->isOpen() || configureWindow_->isOpen() ||
                    cameraWindow_->isOpen();
 
-        // Cap the loop (~60 fps) so idle windows don't busy-spin the CPU.
-        SDL_Delay(16);
+        const double elapsedMs =
+            (SDL_GetPerformanceCounter() - frameStart) * msPerCount;
+        if (elapsedMs < kTargetFrameMs) {
+            SDL_Delay(static_cast<Uint32>(kTargetFrameMs - elapsedMs));
+        }
     }
     return 0;
 }
@@ -123,7 +134,6 @@ void Application::pumpEvents() {
 }
 
 void Application::renderAll() {
-    renderer_->updateDebugWindow();
     // Drives OGRE's off-screen render (its own GL context) before any window's
     // own render pass acquires its GL context, rather than from within
     // CameraWindow::drawUi() mid-pass; see updateTrackingAndRender()'s comment.
@@ -134,11 +144,20 @@ void Application::renderAll() {
 }
 
 void Application::shutdown() {
+    // Stop the background threads before tearing down anything they touch.
+    if (trackingWorker_) {
+        trackingWorker_->stop();
+    }
+    if (captureWorker_) {
+        captureWorker_->stop();
+    }
     // Destroy windows (and their GL/ImGui contexts) before tearing down SDL.
     cameraWindow_.reset();
     configureWindow_.reset();
     uploadWindow_.reset();
     renderer_.reset();
+    trackingWorker_.reset();
+    captureWorker_.reset();
     if (nfdInitialized_) {
         NFD_Quit();
         nfdInitialized_ = false;

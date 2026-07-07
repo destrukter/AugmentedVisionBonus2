@@ -22,6 +22,7 @@ Id DataStore::addImage(const std::string& filePath, const std::string& name) {
     asset.name = name.empty() ? fileNameOf(filePath) : name;
     const Id id = asset.id;
     images_.emplace(id, std::move(asset));
+    ++imageRevision_;
     return id;
 }
 
@@ -38,6 +39,7 @@ bool DataStore::loadImagePixels(Id imageId) {
         return false; // missing file or unsupported format
     }
     it->second.pixels = std::move(pixels);
+    ++imageRevision_;
     return true;
 }
 
@@ -45,6 +47,7 @@ bool DataStore::removeImage(Id imageId) {
     if (images_.erase(imageId) == 0) {
         return false;
     }
+    ++imageRevision_;
     // Drop any assignments that referenced this image.
     for (auto it = assignments_.begin(); it != assignments_.end();) {
         it = (it->second.imageId == imageId) ? assignments_.erase(it) : std::next(it);
@@ -215,6 +218,9 @@ bool DataStore::setTransform(Id assignmentId, const Transform& transform) {
 // ---- Bulk -----------------------------------------------------------------
 
 void DataStore::clear() {
+    if (!images_.empty()) {
+        ++imageRevision_;
+    }
     images_.clear();
     models_.clear();
     assignments_.clear();
