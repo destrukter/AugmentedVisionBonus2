@@ -62,19 +62,33 @@ void UploadWindow::drawUi() {
 void UploadWindow::drawUploadSection() {
     ImGui::TextUnformatted("Upload assets");
 
+    ImGui::InputTextWithHint("##imgpath", "optional: paste a path, or leave empty to browse",
+                             imagePathBuf_, sizeof(imagePathBuf_));
+    ImGui::SameLine();
     if (ImGui::Button("Add image...")) {
-        const std::string path = pickFile("Images", "png,jpg,jpeg,bmp");
+        std::string path = imagePathBuf_;
+        if (path.empty()) {
+            path = pickFile("Images", "png,jpg,jpeg,bmp");
+        }
         if (!path.empty()) {
             const Id id = store_->addImage(path);
             // Decode now so the tracker has a template to match against.
             store_->loadImagePixels(id);
+            imagePathBuf_[0] = '\0';
         }
     }
+
+    ImGui::InputTextWithHint("##fbxpath", "optional: paste a path, or leave empty to browse",
+                             modelPathBuf_, sizeof(modelPathBuf_));
     ImGui::SameLine();
     if (ImGui::Button("Add FBX model...")) {
-        const std::string path = pickFile("FBX models", "fbx");
+        std::string path = modelPathBuf_;
+        if (path.empty()) {
+            path = pickFile("FBX models", "fbx");
+        }
         if (!path.empty()) {
             store_->addModel(path);
+            modelPathBuf_[0] = '\0';
         }
     }
 

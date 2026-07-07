@@ -38,6 +38,11 @@ private:
     // Transient UI selection state.
     Id selectedImage_{kInvalidId};
     Id selectedModel_{kInvalidId};
+
+    // Optional pasted-path entry; left empty, "Add..." opens a native file
+    // dialog instead.
+    char imagePathBuf_[512]{};
+    char modelPathBuf_[512]{};
 };
 
 } // namespace avb
