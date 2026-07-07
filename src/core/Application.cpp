@@ -24,8 +24,16 @@ bool Application::initialize() {
     }
     sdlInitialized_ = true;
 
-    // Request an OpenGL 3.0 core context (matches ImGui's "#version 130").
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    // Request an OpenGL 3.0 context (matches ImGui's "#version 130"). Profile
+    // masks (core/compatibility) are only meaningful for GL >= 3.2 - requesting
+    // the core profile together with version 3.0 is an invalid combination that
+    // drivers resolve inconsistently (observed: Mesa silently substitutes a 4.5
+    // compatibility context instead), which left the GL state ImGui depends on
+    // (VAO/profile-mask-derived behaviour) mismatched with what it had detected,
+    // causing draw calls to silently fail with GL_INVALID_OPERATION. Requesting
+    // compatibility explicitly keeps the context consistent with the GLSL 130
+    // shaders across drivers.
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
@@ -109,6 +117,10 @@ void Application::pumpEvents() {
 
 void Application::renderAll() {
     renderer_->updateDebugWindow();
+    // Drives OGRE's off-screen render (its own GL context) before any window's
+    // own render pass acquires its GL context, rather than from within
+    // CameraWindow::drawUi() mid-pass; see updateTrackingAndRender()'s comment.
+    cameraWindow_->updateTrackingAndRender();
     uploadWindow_->renderFrame();
     configureWindow_->renderFrame();
     cameraWindow_->renderFrame();

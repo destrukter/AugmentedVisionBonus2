@@ -127,10 +127,14 @@ void Window::renderFrame() {
 
     drawUi();
 
-    // drawUi() may have handed the GL context to another library (the Camera
-    // window drives an off-screen OGRE render). Re-assert this window's context
-    // before the final clear + ImGui draw, or those commands land in the wrong
-    // context and the window is presented blank.
+    // Callers must not switch the current GL context away from this window's
+    // own from within drawUi() (see CameraWindow::updateTrackingAndRender(),
+    // which the Application runs before renderFrame() for exactly this
+    // reason): re-entering this context mid-render-pass, rather than holding
+    // it for the whole pass, left previously-created GL objects (e.g. the
+    // ImGui shader program) valid only intermittently on at least one driver
+    // (Mesa llvmpipe), silently failing every draw call and leaving the
+    // window blank.
     SDL_GL_MakeCurrent(sdlWindow_, glContext_);
     ImGui::SetCurrentContext(imguiContext_);
 
@@ -140,11 +144,8 @@ void Window::renderFrame() {
 #define GL_FRAMEBUFFER 0x8D40
 #endif
 
-    // OGRE's off-screen render (driven by the Camera window's drawUi) leaves its
-    // render-target framebuffer bound in this GL context. Without resetting it,
-    // the window's own clear + ImGui draw land in OGRE's framebuffer instead of
-    // the window and it is presented blank. Bind the default framebuffer and
-    // clear any leftover scissor so the final draw always targets this window.
+    // Bind the default framebuffer and clear any leftover scissor so the final
+    // draw always targets this window, regardless of what drawUi() left bound.
     using BindFramebufferFn = void (*)(GLenum, GLuint);
     static auto bindFramebuffer = reinterpret_cast<BindFramebufferFn>(
         SDL_GL_GetProcAddress("glBindFramebuffer"));
@@ -159,6 +160,7 @@ void Window::renderFrame() {
     glClearColor(0.10f, 0.10f, 0.11f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
     SDL_GL_SwapWindow(sdlWindow_);
 }
 

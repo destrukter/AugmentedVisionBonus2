@@ -31,6 +31,16 @@ public:
     /// Call after images are uploaded/removed.
     void refreshTrackedImages();
 
+    /// Runs tracking and drives OGRE's off-screen render for this frame. This
+    /// makes OGRE's own GL context current, so the Application must call it
+    /// before this window's renderFrame() rather than from drawUi(): switching
+    /// away from and back to this window's GL context mid-render-pass (as
+    /// opposed to once, before the pass starts) left this window's existing GL
+    /// objects (e.g. its ImGui shader program) intact only intermittently on
+    /// at least one driver (Mesa llvmpipe), which silently broke every draw
+    /// call and left the composited feed blank.
+    void updateTrackingAndRender();
+
     /// When true (default), if no image is tracked but assignments exist, the
     /// first assigned model is rendered at a fixed pose in front of the camera
     /// so the 3D pipeline is visible without a working tracker/camera.
@@ -40,7 +50,6 @@ protected:
     void drawUi() override;
 
 private:
-    void updateTrackingAndRender();
     void uploadCompositedToTexture();  // composited image -> this window's GL texture
 
     std::shared_ptr<DataStore> store_;

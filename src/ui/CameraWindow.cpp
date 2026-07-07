@@ -90,12 +90,9 @@ void CameraWindow::refreshTrackedImages() {
 }
 
 void CameraWindow::drawUi() {
-    updateTrackingAndRender();
-    // updateTrackingAndRender() drives OGRE's off-screen render, which makes
-    // OGRE's own GL context current and leaves it so. Restore this window's GL
-    // context before uploading the camera texture and letting ImGui draw, or the
-    // texture is created in the wrong context and the feed shows up black.
-    makeContextCurrent();
+    // updateTrackingAndRender() already ran (see Application::renderAll()) and
+    // drove OGRE's off-screen render before this window's own GL context was
+    // reacquired for the frame; nothing here needs to touch OGRE's context.
     uploadCompositedToTexture();
 
     beginFullWindow("Camera");
