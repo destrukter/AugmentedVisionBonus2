@@ -28,6 +28,9 @@ compile_commands.json
 Ogre.log
 ogre.log
 
+# Per-window ImGui layout state written at runtime
+imgui_*.ini
+
 # Local user uploads / runtime data
 /data/
 *.fbx

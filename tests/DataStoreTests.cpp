@@ -103,6 +103,30 @@ static void test_assign_unknown_ids_fails() {
     CHECK(store.assign(/*model*/ kInvalidId, img) == kInvalidId);
 }
 
+static void test_image_revision_tracks_image_changes() {
+    DataStore store;
+    const std::uint64_t r0 = store.imageRevision();
+
+    const Id img = store.addImage("1.png");
+    const std::uint64_t r1 = store.imageRevision();
+    CHECK(r1 > r0);
+
+    // A remove + add between two polls must be observable, unlike a count.
+    CHECK(store.removeImage(img));
+    const Id img2 = store.addImage("2.png");
+    (void)img2;
+    const std::uint64_t r2 = store.imageRevision();
+    CHECK(r2 > r1);
+
+    // Non-image mutations don't churn the image revision.
+    const Id model = store.addModel("m.fbx");
+    store.assign(model, img2);
+    CHECK(store.imageRevision() == r2);
+
+    store.clear();
+    CHECK(store.imageRevision() > r2);
+}
+
 void run_datastore_tests() {
     test_add_and_lookup();
     test_assignment_defaults_to_identity();
@@ -112,4 +136,5 @@ void run_datastore_tests() {
     test_set_transform_persists();
     test_removing_image_drops_assignments();
     test_assign_unknown_ids_fails();
+    test_image_revision_tracks_image_changes();
 }

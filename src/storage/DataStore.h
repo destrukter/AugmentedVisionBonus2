@@ -38,6 +38,12 @@ public:
     const ImageAsset* image(Id imageId) const;
     std::vector<Id> imageIds() const;
 
+    /// Monotonic counter bumped whenever the image set (or an image's decoded
+    /// pixels) changes. Lets consumers such as the tracker's target list detect
+    /// staleness cheaply and exactly - unlike comparing imageIds().size(),
+    /// which misses a remove+add happening between two polls.
+    std::uint64_t imageRevision() const { return imageRevision_; }
+
     // ---- Models -----------------------------------------------------------
     /// Registers an FBX model file. `name` defaults to the file name when empty.
     Id addModel(const std::string& filePath, const std::string& name = "");
@@ -83,6 +89,7 @@ private:
     Id nextId() { return ++idCounter_; }
 
     Id idCounter_{kInvalidId};
+    std::uint64_t imageRevision_{0};
     std::unordered_map<Id, ImageAsset> images_;
     std::unordered_map<Id, ModelAsset> models_;
     std::unordered_map<Id, Assignment> assignments_;

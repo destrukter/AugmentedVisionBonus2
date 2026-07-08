@@ -1,25 +1,46 @@
 #include "ui/UploadWindow.h"
 
+#include <string>
 #include <utility>
 
+#include <SDL.h>
 #include <imgui.h>
+#include <nfd.h>
 
+#include "render/ModelLoader.h"
 #include "storage/DataStore.h"
+#include "ui/Panels.h"
+#include "vision/ImageTracker.h"
 
 namespace avb {
 
 namespace {
 
-// Makes the next ImGui window fill the whole OS window (each OS window hosts a
-// single top-level panel).
-void beginFullWindow(const char* name) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin(name, nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+// Below roughly this many ORB features an image is unlikely to ever be
+// detected in the feed; uploads under it succeed but get a warning.
+constexpr int kLowFeatureThreshold = 60;
+
+std::string fileNameOf(const std::string& path) {
+    const auto slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+// Opens a native "Open File" dialog restricted to `filter` (e.g. "png,jpg").
+// Returns the chosen path, or empty if the user cancelled or the dialog
+// failed (logged via SDL so failures aren't silent).
+std::string pickFile(const char* filterName, const char* filterExtensions) {
+    nfdchar_t* path = nullptr;
+    const nfdfilteritem_t filter[1] = {{filterName, filterExtensions}};
+    const nfdresult_t result = NFD_OpenDialog(&path, filter, 1, nullptr);
+    if (result == NFD_OKAY) {
+        std::string picked = path;
+        NFD_FreePath(path);
+        return picked;
+    }
+    if (result == NFD_ERROR) {
+        SDL_Log("NFD_OpenDialog failed: %s", NFD_GetError());
+    }
+    return {}; // NFD_CANCEL, or NFD_ERROR already logged above
 }
 
 } // namespace
@@ -31,7 +52,9 @@ UploadWindow::UploadWindow(std::shared_ptr<DataStore> store,
       onConfigure_(std::move(onConfigure)) {}
 
 void UploadWindow::drawUi() {
-    beginFullWindow("Upload");
+    // Scrolling allowed: the asset/assignment lists have fixed-size rows and
+    // may legitimately overflow a small window.
+    beginFullWindow("Upload", /*allowScroll=*/true);
     drawUploadSection();
     ImGui::Separator();
     drawAssignmentSection();
@@ -41,22 +64,44 @@ void UploadWindow::drawUi() {
 void UploadWindow::drawUploadSection() {
     ImGui::TextUnformatted("Upload assets");
 
-    ImGui::InputTextWithHint("##imgpath", "path to image (png/jpg/...)",
+    ImGui::InputTextWithHint("##imgpath", "optional: paste a path, or leave empty to browse",
                              imagePathBuf_, sizeof(imagePathBuf_));
     ImGui::SameLine();
-    if (ImGui::Button("Add image") && imagePathBuf_[0] != '\0') {
-        const Id id = store_->addImage(imagePathBuf_);
-        // Decode now so the tracker has a template to match against.
-        store_->loadImagePixels(id);
-        imagePathBuf_[0] = '\0';
+    if (ImGui::Button("Add image...")) {
+        std::string path = imagePathBuf_;
+        if (path.empty()) {
+            path = pickFile("Images", "png,jpg,jpeg,bmp");
+        }
+        if (!path.empty()) {
+            uploadImage(path);
+            imagePathBuf_[0] = '\0';
+        }
     }
 
-    ImGui::InputTextWithHint("##fbxpath", "path to FBX model",
+    ImGui::InputTextWithHint("##fbxpath", "optional: paste a path, or leave empty to browse",
                              modelPathBuf_, sizeof(modelPathBuf_));
     ImGui::SameLine();
-    if (ImGui::Button("Add FBX model") && modelPathBuf_[0] != '\0') {
-        store_->addModel(modelPathBuf_);
-        modelPathBuf_[0] = '\0';
+    if (ImGui::Button("Add FBX model...")) {
+        std::string path = modelPathBuf_;
+        if (path.empty()) {
+            path = pickFile("FBX models", "fbx");
+        }
+        if (!path.empty()) {
+            uploadModel(path);
+            modelPathBuf_[0] = '\0';
+        }
+    }
+
+    if (!statusMessage_.empty()) {
+        ImVec4 color;
+        switch (statusKind_) {
+            case StatusKind::Success: color = ImVec4(0.4f, 0.9f, 0.4f, 1.0f); break;
+            case StatusKind::Warning: color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f); break;
+            case StatusKind::Error:   color = ImVec4(1.0f, 0.4f, 0.4f, 1.0f); break;
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, color);
+        ImGui::TextWrapped("%s", statusMessage_.c_str());
+        ImGui::PopStyleColor();
     }
 
     ImGui::Spacing();
@@ -87,6 +132,52 @@ void UploadWindow::drawUploadSection() {
     }
 
     ImGui::Columns(1);
+}
+
+void UploadWindow::uploadImage(const std::string& path) {
+    const Id id = store_->addImage(path);
+    // Decode now so the tracker has a template to match against - and so a
+    // broken upload is caught here, with feedback, instead of silently never
+    // tracking.
+    if (!store_->loadImagePixels(id)) {
+        store_->removeImage(id);
+        setStatus(StatusKind::Error,
+                  "Could not load image '" + fileNameOf(path) +
+                      "': the file is missing, unreadable or not a supported "
+                      "image format.");
+        return;
+    }
+    const ImageAsset* img = store_->image(id);
+    const int features =
+        img ? ImageTracker::countTrackableFeatures(img->pixels) : 0;
+    if (features < kLowFeatureThreshold) {
+        setStatus(StatusKind::Warning,
+                  "Image '" + fileNameOf(path) + "' uploaded, but it has few "
+                  "distinctive features (" + std::to_string(features) +
+                  ") and may not track reliably. Prefer detailed, high-contrast "
+                  "images.");
+    } else {
+        setStatus(StatusKind::Success,
+                  "Image '" + fileNameOf(path) + "' uploaded (" +
+                      std::to_string(features) + " trackable features).");
+    }
+}
+
+void UploadWindow::uploadModel(const std::string& path) {
+    std::string error;
+    if (!ModelLoader::validateModelFile(path, &error)) {
+        setStatus(StatusKind::Error, "Could not load model '" +
+                                         fileNameOf(path) + "': " + error);
+        return;
+    }
+    store_->addModel(path);
+    setStatus(StatusKind::Success,
+              "Model '" + fileNameOf(path) + "' uploaded.");
+}
+
+void UploadWindow::setStatus(StatusKind kind, std::string message) {
+    statusKind_ = kind;
+    statusMessage_ = std::move(message);
 }
 
 void UploadWindow::drawAssignmentSection() {

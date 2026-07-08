@@ -19,6 +19,18 @@
 
 #include <RTShaderSystem/OgreShaderGenerator.h>
 
+// GLContext (shared by the GL and GL3Plus render systems - the two installed
+// headers are the same GLSupport class) exposes setCurrent(), the only public
+// way to force OGRE's context back onto the thread; see
+// makeRenderContextCurrent().
+#if __has_include(<RenderSystems/GL3Plus/OgreGLContext.h>)
+#include <RenderSystems/GL3Plus/OgreGLContext.h>
+#define AVB_HAVE_OGRE_GLCONTEXT 1
+#elif __has_include(<RenderSystems/GL/OgreGLContext.h>)
+#include <RenderSystems/GL/OgreGLContext.h>
+#define AVB_HAVE_OGRE_GLCONTEXT 1
+#endif
+
 namespace avb {
 
 namespace {
@@ -140,21 +152,40 @@ public:
                                           Ogre::Material* originalMaterial,
                                           unsigned short /*lodIndex*/,
                                           const Ogre::Renderable* /*rend*/) override {
+        Ogre::LogManager::getSingleton().logMessage(
+            "OgreContext::MaterialResolver: handleSchemeNotFound('" + schemeName +
+            "') for material '" + originalMaterial->getName() + "'");
         if (schemeName != Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "OgreContext::MaterialResolver: scheme mismatch (RTSS scheme is '" +
+                Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME + "'), skipping");
             return nullptr;
         }
         if (!gen_->createShaderBasedTechnique(
                 *originalMaterial, Ogre::MaterialManager::DEFAULT_SCHEME_NAME,
                 schemeName)) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "OgreContext::MaterialResolver: createShaderBasedTechnique FAILED for '" +
+                    originalMaterial->getName() + "'",
+                Ogre::LML_CRITICAL);
             return nullptr;
         }
         gen_->validateMaterial(schemeName, originalMaterial->getName(),
                                originalMaterial->getGroup());
         for (Ogre::Technique* tech : originalMaterial->getTechniques()) {
             if (tech->getSchemeName() == schemeName) {
+                Ogre::LogManager::getSingleton().logMessage(
+                    "OgreContext::MaterialResolver: generated technique for '" +
+                    originalMaterial->getName() + "', supported=" +
+                    (tech->isSupported() ? "yes" : "no"));
                 return tech;
             }
         }
+        Ogre::LogManager::getSingleton().logMessage(
+            "OgreContext::MaterialResolver: no technique with scheme '" + schemeName +
+                "' found on '" + originalMaterial->getName() +
+                "' after generation (validateMaterial likely removed it)",
+            Ogre::LML_CRITICAL);
         return nullptr;
     }
 
@@ -253,6 +284,22 @@ bool OgreContext::initShaderSystem() {
     materialResolver_ = std::make_unique<MaterialResolver>(shaderGen_);
     Ogre::MaterialManager::getSingleton().addListener(materialResolver_.get());
     return true;
+}
+
+void OgreContext::makeRenderContextCurrent() {
+#ifdef AVB_HAVE_OGRE_GLCONTEXT
+    if (!hiddenWindow_) {
+        return;
+    }
+    Ogre::GLContext* context = nullptr;
+    // The symbolic constant (GLRenderTexture::CustomAttributeString_GLCONTEXT)
+    // lives in the dynamically loaded render-system plugin, so use its literal
+    // value rather than linking against the plugin.
+    hiddenWindow_->getCustomAttribute("GLCONTEXT", &context);
+    if (context) {
+        context->setCurrent();
+    }
+#endif
 }
 
 bool OgreContext::initialize() {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace avb {
@@ -10,7 +11,9 @@ class OgreContext;
 class ModelLoader;
 class SceneRenderer;
 class CameraCapture;
+class CaptureWorker;
 class ImageTracker;
+class TrackingWorker;
 class Window;
 class UploadWindow;
 class ConfigureWindow;
@@ -41,6 +44,7 @@ private:
 
     // Backend (shared).
     std::shared_ptr<DataStore> store_;
+    std::string libraryDir_;  ///< Asset-library root (poses persist here).
 
     // Rendering / vision (shared with the Camera window).
     std::shared_ptr<OgreContext> ogre_;
@@ -48,6 +52,8 @@ private:
     std::shared_ptr<SceneRenderer> renderer_;
     std::shared_ptr<CameraCapture> capture_;
     std::shared_ptr<ImageTracker> tracker_;
+    std::shared_ptr<CaptureWorker> captureWorker_;    // camera thread
+    std::shared_ptr<TrackingWorker> trackingWorker_;  // detection thread
 
     // Frontend windows.
     std::unique_ptr<UploadWindow> uploadWindow_;
@@ -56,6 +62,7 @@ private:
 
     bool running_{false};
     bool sdlInitialized_{false};
+    bool nfdInitialized_{false};
 };
 
 } // namespace avb

@@ -21,6 +21,13 @@ public:
     /// same file path return the cached mesh name.
     std::string loadFbx(const std::string& filePath, const std::string& meshName);
 
+    /// Checks (via Assimp, no OGRE/GPU needed) whether `filePath` is a loadable
+    /// model containing at least one non-empty mesh. Intended for upload-time
+    /// validation so a broken file is rejected with feedback instead of
+    /// silently failing to render later. On failure `error` (if non-null)
+    /// receives a human-readable reason.
+    static bool validateModelFile(const std::string& filePath, std::string* error);
+
 private:
     /// Lazily creates the shared default lit material and returns its name.
     std::string ensureDefaultMaterial();

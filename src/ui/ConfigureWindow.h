@@ -1,6 +1,9 @@
 #pragma once
 
+#include <functional>
 #include <memory>
+
+#include <Eigen/Core>
 
 #include "storage/Transform.h"
 #include "storage/Types.h"
@@ -12,12 +15,19 @@ class DataStore;
 
 /// Configure window (window 2 of 3).
 ///
-/// Edits the translation and rotation of a model **relative to its image** for a
-/// single assignment. The edits live in a working copy until the user clicks
-/// "Save", which writes them back into the DataStore.
+/// Edits the pose of a model **relative to its image** for a single
+/// assignment, either interactively - a 3D viewport with translate / rotate /
+/// scale gizmo handles (ImGuizmo) drawn over the image plane - or through the
+/// numeric fields below it. The edits live in a working copy until the user
+/// clicks "Save", which writes them back into the DataStore.
 class ConfigureWindow : public Window {
 public:
-    explicit ConfigureWindow(std::shared_ptr<DataStore> store);
+    /// Invoked after a pose was successfully saved to the store (used by the
+    /// Application to persist library poses into assignments.cfg).
+    using SaveCallback = std::function<void(Id assignmentId)>;
+
+    explicit ConfigureWindow(std::shared_ptr<DataStore> store,
+                             SaveCallback onSaved = {});
 
     /// Loads an assignment for editing (called when "Configure" is clicked in
     /// the Upload window). Pulls the stored Transform into the working copy.
@@ -27,13 +37,29 @@ protected:
     void drawUi() override;
 
 private:
+    void drawGizmoViewport();  ///< Interactive 3D manipulation of working_.
     void save();    ///< Commit working_ back into the store.
     void revert();  ///< Reload working_ from the store.
 
+    /// Aspect ratio (height/width) of the assigned image's tracking plane,
+    /// falling back to 1 when the image pixels aren't available.
+    float imagePlaneAspect() const;
+
     std::shared_ptr<DataStore> store_;
+    SaveCallback onSaved_;
     Id activeAssignment_{kInvalidId};
     Transform working_{};   ///< Editable copy; defaults to identity.
     bool dirty_{false};     ///< True when working_ differs from the stored pose.
+
+    int gizmoOperation_{0}; ///< 0 translate, 1 rotate, 2 scale.
+    float orbitYawDeg_{40.0f};    ///< Viewport camera orbit around the plane.
+    float orbitPitchDeg_{30.0f};
+    float orbitDistance_{3.0f};
+    /// Matrix the gizmo manipulates. Kept across the frames of one drag (and
+    /// only rebuilt from working_ while the gizmo is idle) because rebuilding
+    /// it from the decomposed Euler angles mid-drag makes the handles snap at
+    /// representation boundaries.
+    Eigen::Matrix4f gizmoMatrix_{Eigen::Matrix4f::Identity()};
 };
 
 } // namespace avb

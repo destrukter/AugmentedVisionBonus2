@@ -1,5 +1,8 @@
 #include "ui/CameraWindow.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <utility>
@@ -13,29 +16,24 @@
 #include "render/SceneRenderer.h"
 #include "storage/Assets.h"
 #include "storage/DataStore.h"
+#include "ui/Panels.h"
 #include "vision/CameraCapture.h"
+#include "vision/CaptureWorker.h"
 #include "vision/ImageTracker.h"
+#include "vision/TrackingWorker.h"
 
 namespace avb {
 
 namespace {
 
-void beginFullWindow(const char* name) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin(name, nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
-}
-
-// A fixed pose placing a model a little in front of the camera (looking down
-// -Z), used for the preview fallback when nothing is tracked yet.
-Eigen::Matrix4f previewPose() {
-    Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
-    m(2, 3) = -3.0f; // 3 units in front of the camera
-    return m;
+// Turntable angle for the untracked-model preview: a slow spin makes it
+// obvious the preview is live 3D rather than a static image.
+float previewYawDeg() {
+    using clock = std::chrono::steady_clock;
+    static const clock::time_point start = clock::now();
+    const double seconds =
+        std::chrono::duration<double>(clock::now() - start).count();
+    return static_cast<float>(std::fmod(seconds * 20.0, 360.0));
 }
 
 // Draws the detected target's quad (and a confidence label) onto a BGR frame.
@@ -59,14 +57,17 @@ void drawTrackingOutline(cv::Mat& frame, const Detection& d) {
 } // namespace
 
 CameraWindow::CameraWindow(std::shared_ptr<DataStore> store,
-                           std::shared_ptr<CameraCapture> capture,
+                           std::shared_ptr<CaptureWorker> capture,
+                           std::shared_ptr<TrackingWorker> tracking,
                            std::shared_ptr<ImageTracker> tracker,
                            std::shared_ptr<SceneRenderer> renderer)
     : Window("Camera", 1280, 720),
       store_(std::move(store)),
       capture_(std::move(capture)),
+      tracking_(std::move(tracking)),
       tracker_(std::move(tracker)),
-      renderer_(std::move(renderer)) {}
+      renderer_(std::move(renderer)),
+      devices_(CameraCapture::listDevices()) {}
 
 CameraWindow::~CameraWindow() {
     if (glTexture_ != 0) {
@@ -87,23 +88,65 @@ void CameraWindow::refreshTrackedImages() {
             tracker_->addTarget(id, img->pixels);
         }
     }
+    if (tracking_) {
+        tracking_->resetFilter();
+    }
 }
 
 void CameraWindow::drawUi() {
-    updateTrackingAndRender();
-    // updateTrackingAndRender() drives OGRE's off-screen render, which makes
-    // OGRE's own GL context current and leaves it so. Restore this window's GL
-    // context before uploading the camera texture and letting ImGui draw, or the
-    // texture is created in the wrong context and the feed shows up black.
-    makeContextCurrent();
+    // updateTrackingAndRender() already ran (see Application::renderAll()) and
+    // drove OGRE's off-screen render before this window's own GL context was
+    // reacquired for the frame; nothing here needs to touch OGRE's context.
     uploadCompositedToTexture();
 
-    beginFullWindow("Camera");
+    // No scrolling: the letterboxed image is sized from the available region,
+    // which would grow with every scroll inside a scrolling window.
+    beginFullWindow("Camera", /*allowScroll=*/false);
 
-    const bool camOpen = capture_ && capture_->isOpen();
-    ImGui::Text("Camera: %s", camOpen ? "connected" : "no device");
+    // Device selector: the list is rescanned every frame the combo is open,
+    // so replugging a camera shows up without restarting.
+    if (capture_) {
+        const int current = capture_->device();
+        std::string currentLabel = std::to_string(current) + ": Camera";
+        for (const CameraDeviceInfo& dev : devices_) {
+            if (dev.index == current) {
+                currentLabel = std::to_string(dev.index) + ": " + dev.name;
+                break;
+            }
+        }
+        ImGui::SetNextItemWidth(260.0f);
+        if (ImGui::BeginCombo("##camera_device", currentLabel.c_str())) {
+            devices_ = CameraCapture::listDevices();
+            if (devices_.empty()) {
+                ImGui::TextDisabled("No cameras found");
+            }
+            for (const CameraDeviceInfo& dev : devices_) {
+                const std::string label =
+                    std::to_string(dev.index) + ": " + dev.name;
+                if (ImGui::Selectable(label.c_str(), dev.index == current)) {
+                    capture_->setDevice(dev.index);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reconnect")) {
+            capture_->requestReconnect();
+        }
+        ImGui::SameLine();
+    }
+
+    const bool camOpen = capture_ && capture_->cameraOpen();
+    if (camOpen) {
+        ImGui::Text("connected | feed %.0f fps | tracking %.0f fps",
+                    capture_->fps(), tracking_ ? tracking_->fps() : 0.0);
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.3f, 1.0f),
+                           "no device (retrying...)");
+    }
     ImGui::SameLine();
-    ImGui::Text("| Tracked images: %zu", store_->imageIds().size());
+    ImGui::Text("| Images: %zu | Tracked now: %d", store_->imageIds().size(),
+                detectionCount_);
 
     bool preview = previewWhenUntracked_;
     if (ImGui::Checkbox("Preview model when untracked", &preview)) {
@@ -116,11 +159,24 @@ void CameraWindow::drawUi() {
     }
     ImGui::Separator();
 
-    if (glTexture_ != 0) {
+    if (glTexture_ != 0 && texWidth_ > 0 && texHeight_ > 0) {
+        // Letterbox: scale the feed to fit the available region while keeping
+        // its aspect ratio, instead of stretching it to the window. The feed
+        // is only ever scaled uniformly for display; tracking always runs on
+        // the raw camera frames, so the window size never affects detection.
         const ImVec2 avail = ImGui::GetContentRegionAvail();
-        ImGui::Image(reinterpret_cast<ImTextureID>(
-                         static_cast<std::uintptr_t>(glTexture_)),
-                     avail);
+        if (avail.x >= 1.0f && avail.y >= 1.0f) {
+            const float scale =
+                std::min(avail.x / static_cast<float>(texWidth_),
+                         avail.y / static_cast<float>(texHeight_));
+            const ImVec2 size(texWidth_ * scale, texHeight_ * scale);
+            const ImVec2 cursor = ImGui::GetCursorPos();
+            ImGui::SetCursorPos(ImVec2(cursor.x + (avail.x - size.x) * 0.5f,
+                                       cursor.y + (avail.y - size.y) * 0.5f));
+            ImGui::Image(reinterpret_cast<ImTextureID>(
+                             static_cast<std::uintptr_t>(glTexture_)),
+                         size);
+        }
     } else {
         ImGui::TextDisabled("No rendered frame yet.");
     }
@@ -134,23 +190,27 @@ void CameraWindow::updateTrackingAndRender() {
     }
 
     // Keep tracker templates in sync with the uploaded image set.
-    const std::size_t count = store_->imageIds().size();
-    if (count != lastImageCount_) {
+    const std::uint64_t revision = store_->imageRevision();
+    if (revision != lastImageRevision_) {
         refreshTrackedImages();
-        lastImageCount_ = count;
+        lastImageRevision_ = revision;
     }
 
+    // Newest frame (our own copy) + newest smoothed detections; neither call
+    // blocks on the camera or on feature matching.
     cv::Mat frame;
-    const bool haveFrame = capture_ && capture_->grab(frame);
+    const bool haveFrame = capture_ && capture_->latestFrame(frame) != 0;
 
     renderer_->beginFrame(haveFrame ? frame : cv::Mat());
 
     int rendered = 0;
-    if (tracker_ && haveFrame) {
-        const std::vector<Detection> detections = tracker_->detect(frame);
+    detectionCount_ = 0;
+    if (tracking_ && haveFrame) {
+        const std::vector<Detection> detections = tracking_->latestDetections();
+        detectionCount_ = static_cast<int>(detections.size());
         for (const Detection& d : detections) {
-            // Debug: outline the tracked target on the feed so its detection can
-            // be verified visually. Drawn on `frame`, which SceneRenderer holds a
+            // Outline the tracked target on the feed so its detection can be
+            // verified visually. Drawn on `frame`, which SceneRenderer holds a
             // shallow reference to, so it appears in the composited background.
             if (showTrackingOutline_) {
                 drawTrackingOutline(frame, d);
@@ -168,14 +228,21 @@ void CameraWindow::updateTrackingAndRender() {
         }
     }
 
-    // Fallback so the 3D pipeline is visible before tracking is implemented.
+    // Fallback so the 3D pipeline is visible without a tracked image. The
+    // framing pose fits the whole model in view regardless of its native size
+    // or shape (a fixed distance showed huge models from inside and flat ones
+    // edge-on as a bare sliver).
     if (rendered == 0 && previewWhenUntracked_) {
         const std::vector<Id> assignments = store_->assignmentIds();
         if (!assignments.empty()) {
             const Assignment* a = store_->assignment(assignments.front());
             if (a) {
-                renderer_->drawModel(a->modelId,
-                                     previewPose() * a->transform.toMatrix());
+                const Eigen::Matrix4f configured = a->transform.toMatrix();
+                Eigen::Matrix4f framing;
+                if (renderer_->previewFramingPose(a->modelId, configured,
+                                                  previewYawDeg(), framing)) {
+                    renderer_->drawModel(a->modelId, framing * configured);
+                }
             }
         }
     }

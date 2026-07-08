@@ -51,6 +51,16 @@ public:
     void drawModel(Id modelId, const Eigen::Matrix4f& pose);
     void endFrame();
 
+    /// Computes a camera-space framing pose for previewing `modelId` with
+    /// `configured` (the assignment transform) applied: the model is centered,
+    /// tilted (plus `yawDeg` for a turntable spin) and pushed back far enough
+    /// that its whole bounding sphere fits the view - a fixed distance would
+    /// put the camera inside large models or show flat ones edge-on as a bare
+    /// sliver. Pass the result to drawModel as `pose * configured`. Returns
+    /// false when the model cannot be loaded.
+    bool previewFramingPose(Id modelId, const Eigen::Matrix4f& configured,
+                            float yawDeg, Eigen::Matrix4f& outPose);
+
     /// Composited RGBA image (camera frame + rendered models). Empty until the
     /// first endFrame(). CV_8UC4.
     const cv::Mat& compositedImage() const { return composited_; }
@@ -60,6 +70,10 @@ public:
 
 private:
     Ogre::SceneNode* ensureNode(Id modelId);
+    /// (Re)creates the off-screen render target at the given size. Called from
+    /// initialize() and again whenever the camera frame size changes.
+    bool createRenderTarget(int width, int height);
+    void destroyRenderTarget();
 
     std::shared_ptr<OgreContext> context_;
     std::shared_ptr<ModelLoader> loader_;
@@ -77,10 +91,13 @@ private:
 
     cv::Mat cameraFrame_;            // latest BGR frame (may be empty)
     cv::Mat composited_;             // RGBA output
+    cv::Mat drawnMask_;              // compositing scratch (see endFrame)
+    cv::Mat solidAlpha_;             // cached all-255 plane for opaque output
     std::vector<unsigned char> readback_;  // RGBA scratch for RTT readback
 
     int width_{0};
     int height_{0};
+    int visibleModels_{0};           // models drawn since beginFrame()
     bool initialized_{false};
 };
 
