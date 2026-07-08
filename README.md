@@ -30,14 +30,19 @@ by one shared in-memory data store (see `src/storage`).
      trackable features get a warning.
    - Assign an FBX model to an image. One model may be assigned to many images.
    - Revert (unassign) and re-assign freely.
+   - **Save session to library**: copies any assets that were uploaded from
+     outside the library into `assets/library/` and writes every assignment
+     with its pose to `assignments.cfg`, so the whole session is restored on
+     the next start.
    - For every model assigned to an image, a **Configure** button opens that pairing
      in the Configure window.
 
 2. **Configure window** (`src/ui/ConfigureWindow`)
    - Edit the pose of an FBX model **relative to its image** interactively:
-     a 3D viewport shows the image plane and a translate / rotate / scale
-     gizmo (drag the handles; right-drag orbits the view, wheel zooms).
-     Scale is per-axis (with a uniform handle at the gizmo center).
+     the viewport shows the assignment's actual picture and actual model,
+     rendered live, with translate / rotate / scale gizmo handles on top
+     (right-drag orbits the view, wheel zooms). Scale is per-axis (with a
+     uniform handle at the gizmo center).
    - Numeric fields underneath give exact control over the same values.
    - **Save** writes the pose back into the data store.
 

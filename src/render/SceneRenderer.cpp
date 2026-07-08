@@ -101,6 +101,9 @@ bool SceneRenderer::createRenderTarget(int width, int height) {
     // no fixed-function pipeline - can actually draw, so geometry renders
     // invisibly.
     vp->setMaterialScheme(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
+    // Render only the AR scene; the Configure window's preview objects share
+    // the scene manager but carry a different visibility flag.
+    vp->setVisibilityMask(kMainSceneVisibilityMask);
     renderTarget_->setAutoUpdated(false);
 
     readback_.assign(static_cast<size_t>(width_) * height_ * 4, 0);
@@ -155,6 +158,7 @@ Ogre::SceneNode* SceneRenderer::ensureNode(Id modelId) {
     }
     Ogre::SceneManager* sm = context_->sceneManager();
     Ogre::Entity* entity = sm->createEntity("avb/ent/" + std::to_string(modelId), mesh);
+    entity->setVisibilityFlags(kMainSceneVisibilityMask);
     Ogre::SceneNode* node = worldRoot_->createChildSceneNode();
     node->attachObject(entity);
     nodes_.emplace(modelId, node);

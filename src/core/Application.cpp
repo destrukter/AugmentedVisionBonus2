@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "render/ConfigurePreview.h"
 #include "render/ModelLoader.h"
 #include "render/OgreContext.h"
 #include "render/SceneRenderer.h"
@@ -144,12 +145,17 @@ bool Application::initialize() {
     captureWorker_->start();
     trackingWorker_->start();
 
+    // Off-screen renderer for the Configure window's viewport (the actual
+    // image + model behind the gizmo).
+    configurePreview_ =
+        std::make_shared<ConfigurePreview>(ogre_, modelLoader_, store_);
+
     // Frontend windows. The Upload window's "Configure" button routes the
     // chosen assignment into the Configure window. Saved poses of library
     // assets are persisted back into assignments.cfg so they survive
     // restarts.
     configureWindow_ = std::make_unique<ConfigureWindow>(
-        store_, [this](Id assignmentId) {
+        store_, configurePreview_, [this](Id assignmentId) {
             AssetLibrary lib(store_, &ModelLoader::validateModelFile);
             if (lib.persistAssignment(libraryDir_, assignmentId)) {
                 SDL_Log("Asset library: pose of assignment #%llu saved to "
@@ -159,9 +165,11 @@ bool Application::initialize() {
             }
         });
     uploadWindow_ = std::make_unique<UploadWindow>(
-        store_, [this](Id assignmentId) {
+        store_,
+        [this](Id assignmentId) {
             configureWindow_->openAssignment(assignmentId);
-        });
+        },
+        [this]() { saveSessionToLibrary(); });
     cameraWindow_ = std::make_unique<CameraWindow>(
         store_, captureWorker_, trackingWorker_, tracker_, renderer_);
 
@@ -224,6 +232,37 @@ int Application::run() {
     return 0;
 }
 
+void Application::saveSessionToLibrary() {
+    // When no library existed at startup, create one at the default location
+    // so the session has somewhere to go.
+    if (libraryDir_.empty()) {
+#ifdef AVB_SOURCE_ASSETS_DIR
+        libraryDir_ = std::string(AVB_SOURCE_ASSETS_DIR) + "/library";
+#else
+        libraryDir_ = "assets/library";
+#endif
+    }
+    AssetLibrary library(store_, &ModelLoader::validateModelFile);
+    const AssetLibrary::SessionSaveResult result =
+        library.saveSession(libraryDir_);
+    for (const std::string& warning : result.warnings) {
+        SDL_Log("Save session: %s", warning.c_str());
+    }
+    const std::string summary =
+        "Session saved to '" + libraryDir_ + "': " +
+        std::to_string(result.filesCopied) + " file(s) copied, " +
+        std::to_string(result.assignmentsSaved) +
+        " assignment(s) written to assignments.cfg" +
+        (result.warnings.empty()
+             ? ""
+             : " - " + std::to_string(result.warnings.size()) +
+                   " warning(s), see log");
+    uploadWindow_->setStatus(result.warnings.empty()
+                                 ? UploadWindow::StatusKind::Success
+                                 : UploadWindow::StatusKind::Warning,
+                             summary);
+}
+
 void Application::pumpEvents() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
@@ -241,10 +280,11 @@ void Application::pumpEvents() {
 }
 
 void Application::renderAll() {
-    // Drives OGRE's off-screen render (its own GL context) before any window's
-    // own render pass acquires its GL context, rather than from within
-    // CameraWindow::drawUi() mid-pass; see updateTrackingAndRender()'s comment.
+    // Drive both OGRE off-screen renders (OGRE's own GL context) before any
+    // window's render pass acquires its GL context, rather than from within
+    // drawUi() mid-pass; see updateTrackingAndRender()'s comment.
     cameraWindow_->updateTrackingAndRender();
+    configureWindow_->updatePreviewRender();
     uploadWindow_->renderFrame();
     configureWindow_->renderFrame();
     cameraWindow_->renderFrame();
@@ -262,6 +302,7 @@ void Application::shutdown() {
     cameraWindow_.reset();
     configureWindow_.reset();
     uploadWindow_.reset();
+    configurePreview_.reset();
     renderer_.reset();
     trackingWorker_.reset();
     captureWorker_.reset();

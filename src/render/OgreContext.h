@@ -14,6 +14,14 @@ class ShaderGenerator;
 
 namespace avb {
 
+/// Visibility partitioning of the shared scene manager: the Camera window's
+/// AR composite and the Configure window's preview render different subsets
+/// of the same scene, selected per viewport via these masks (set as
+/// visibility flags on the respective entities). Lights keep the default
+/// all-bits flags and are seen by both.
+constexpr unsigned int kMainSceneVisibilityMask = 1u << 0;
+constexpr unsigned int kConfigPreviewVisibilityMask = 1u << 1;
+
 /// Owns the OGRE3D Root, render system, an off-screen GL context and the shared
 /// scene manager + RTSS shader generator.
 ///

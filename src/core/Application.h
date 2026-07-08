@@ -10,6 +10,7 @@ class DataStore;
 class OgreContext;
 class ModelLoader;
 class SceneRenderer;
+class ConfigurePreview;
 class CameraCapture;
 class CaptureWorker;
 class ImageTracker;
@@ -41,6 +42,9 @@ public:
 private:
     void pumpEvents();   ///< Dispatch SDL events to the right window.
     void renderAll();    ///< Render one frame of every open window.
+    /// Copies external assets into the library and writes all assignments +
+    /// poses to assignments.cfg (the Upload window's "Save session" button).
+    void saveSessionToLibrary();
 
     // Backend (shared).
     std::shared_ptr<DataStore> store_;
@@ -50,6 +54,7 @@ private:
     std::shared_ptr<OgreContext> ogre_;
     std::shared_ptr<ModelLoader> modelLoader_;
     std::shared_ptr<SceneRenderer> renderer_;
+    std::shared_ptr<ConfigurePreview> configurePreview_;  // Configure viewport
     std::shared_ptr<CameraCapture> capture_;
     std::shared_ptr<ImageTracker> tracker_;
     std::shared_ptr<CaptureWorker> captureWorker_;    // camera thread

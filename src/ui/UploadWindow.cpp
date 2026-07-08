@@ -46,10 +46,12 @@ std::string pickFile(const char* filterName, const char* filterExtensions) {
 } // namespace
 
 UploadWindow::UploadWindow(std::shared_ptr<DataStore> store,
-                           ConfigureCallback onConfigure)
+                           ConfigureCallback onConfigure,
+                           SaveSessionCallback onSaveSession)
     : Window("Upload", 900, 600),
       store_(std::move(store)),
-      onConfigure_(std::move(onConfigure)) {}
+      onConfigure_(std::move(onConfigure)),
+      onSaveSession_(std::move(onSaveSession)) {}
 
 void UploadWindow::drawUi() {
     // Scrolling allowed: the asset/assignment lists have fixed-size rows and
@@ -90,6 +92,16 @@ void UploadWindow::drawUploadSection() {
             uploadModel(path);
             modelPathBuf_[0] = '\0';
         }
+    }
+
+    if (onSaveSession_) {
+        if (ImGui::Button("Save session to library")) {
+            onSaveSession_();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled(
+            "(copies external files into the library and writes all "
+            "assignments + poses to assignments.cfg)");
     }
 
     if (!statusMessage_.empty()) {

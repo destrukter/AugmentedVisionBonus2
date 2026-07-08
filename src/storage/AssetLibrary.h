@@ -75,6 +75,19 @@ public:
     /// resolved at the next startup, so persisting them would be misleading.
     bool persistAssignment(const std::string& rootDir, Id assignmentId);
 
+    struct SessionSaveResult {
+        int filesCopied{0};
+        int assignmentsSaved{0};
+        std::vector<std::string> warnings;
+    };
+
+    /// Saves the whole current session into the library so it is restored on
+    /// the next startup: every image/model whose file lives outside the
+    /// library folders is copied in (and the store re-pointed at the copy),
+    /// then every assignment - including manually created ones - is written
+    /// to assignments.cfg with its pose. Missing library folders are created.
+    SessionSaveResult saveSession(const std::string& rootDir);
+
 private:
     std::shared_ptr<DataStore> store_;
     ModelValidator validateModel_;

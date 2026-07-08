@@ -2,13 +2,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <utility>
 
+#include <SDL_opengl.h>
 #include <imgui.h>
 #include <ImGuizmo.h>
 
 #include <Eigen/Geometry>
 
+#include "render/ConfigurePreview.h"
 #include "storage/Assets.h"
 #include "storage/DataStore.h"
 #include "ui/Panels.h"
@@ -20,6 +23,10 @@ namespace {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegToRad = kPi / 180.0f;
 constexpr float kRadToDeg = 180.0f / kPi;
+
+// Vertical FOV of the viewport; must be identical for the gizmo projection
+// and the ConfigurePreview render or handles drift off the rendered pixels.
+constexpr float kViewportFovYDeg = 45.0f;
 
 // Column-major (OpenGL-style) right-handed perspective projection, the layout
 // ImGuizmo expects. Eigen matrices are column-major by default, so .data()
@@ -125,10 +132,39 @@ void drawModelProxy(ImDrawList* drawList, const Eigen::Matrix4f& viewProj,
 } // namespace
 
 ConfigureWindow::ConfigureWindow(std::shared_ptr<DataStore> store,
+                                 std::shared_ptr<ConfigurePreview> preview,
                                  SaveCallback onSaved)
     : Window("Configure", 560, 680),
       store_(std::move(store)),
+      preview_(std::move(preview)),
       onSaved_(std::move(onSaved)) {}
+
+ConfigureWindow::~ConfigureWindow() {
+    if (previewTexture_ != 0) {
+        GLuint id = previewTexture_;
+        glDeleteTextures(1, &id);
+        previewTexture_ = 0;
+    }
+}
+
+Eigen::Vector3f ConfigureWindow::eyePosition() const {
+    const float yaw = orbitYawDeg_ * kDegToRad;
+    const float pitch = orbitPitchDeg_ * kDegToRad;
+    return orbitDistance_ *
+           Eigen::Vector3f(std::cos(pitch) * std::sin(yaw), std::sin(pitch),
+                           std::cos(pitch) * std::cos(yaw));
+}
+
+void ConfigureWindow::updatePreviewRender() {
+    previewValid_ = false;
+    if (!preview_ || !isOpen() || activeAssignment_ == kInvalidId ||
+        canvasW_ < 16 || canvasH_ < 16) {
+        return;
+    }
+    previewValid_ =
+        preview_->render(activeAssignment_, working_.toMatrix(), eyePosition(),
+                         kViewportFovYDeg, canvasW_, canvasH_);
+}
 
 void ConfigureWindow::openAssignment(Id assignmentId) {
     activeAssignment_ = assignmentId;
@@ -222,23 +258,62 @@ void ConfigureWindow::drawUi() {
 }
 
 void ConfigureWindow::drawGizmoViewport() {
-    // The viewport takes all remaining panel space below the controls.
+    // The viewport takes all remaining panel space below the controls. Its
+    // size is recorded for the next updatePreviewRender() call (1-frame lag).
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const ImVec2 canvasSize(std::max(avail.x, 120.0f), std::max(avail.y, 120.0f));
+    canvasW_ = static_cast<int>(canvasSize.x);
+    canvasH_ = static_cast<int>(canvasSize.y);
     const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
-    drawList->AddRectFilled(
-        canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y),
-        IM_COL32(26, 28, 33, 255), 4.0f);
-
-    // Reserve the space with Dummy, NOT InvisibleButton: ImGuizmo only lets a
-    // handle be grabbed while no ImGui item is hovered (CanActivate checks
-    // IsAnyItemHovered), and a button covering the canvas keeps an item
-    // hovered whenever the mouse is over the viewport, making every gizmo
-    // handle dead. Dummy reserves layout space without ever registering as
-    // the hovered item, while IsItemHovered() still works for orbit/zoom.
-    ImGui::Dummy(canvasSize);
+    // Background: the off-screen render of the actual image + actual model
+    // (ConfigurePreview), when available. Displayed 1:1 - it was rendered at
+    // this canvas size with the same camera the gizmo uses below. Falls back
+    // to schematic drawing (plane outline + proxy cube) when the preview
+    // can't render (image pixels missing, model failed to load, first frame).
+    //
+    // Both ImGui::Image and Dummy reserve the layout space without ever
+    // registering as the hovered *item*: ImGuizmo only lets a handle be
+    // grabbed while no item is hovered (CanActivate checks IsAnyItemHovered),
+    // which is also why this must not be an InvisibleButton. IsItemHovered()
+    // still works on both for the orbit/zoom handling.
+    bool showedPreview = false;
+    if (previewValid_ && preview_ && !preview_->image().empty()) {
+        const cv::Mat& img = preview_->image();
+        if (previewTexture_ == 0) {
+            GLuint id = 0;
+            glGenTextures(1, &id);
+            previewTexture_ = id;
+            glBindTexture(GL_TEXTURE_2D, previewTexture_);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, previewTexture_);
+        }
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        if (img.cols != previewTexW_ || img.rows != previewTexH_) {
+            previewTexW_ = img.cols;
+            previewTexH_ = img.rows;
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, previewTexW_, previewTexH_,
+                         0, GL_RGBA, GL_UNSIGNED_BYTE, img.data);
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, previewTexW_, previewTexH_,
+                            GL_RGBA, GL_UNSIGNED_BYTE, img.data);
+        }
+        ImGui::Image(reinterpret_cast<ImTextureID>(
+                         static_cast<std::uintptr_t>(previewTexture_)),
+                     canvasSize);
+        showedPreview = true;
+    } else {
+        drawList->AddRectFilled(canvasPos,
+                                ImVec2(canvasPos.x + canvasSize.x,
+                                       canvasPos.y + canvasSize.y),
+                                IM_COL32(26, 28, 33, 255), 4.0f);
+        ImGui::Dummy(canvasSize);
+    }
 
     // Orbit / zoom the viewport camera.
     if (ImGui::IsItemHovered()) {
@@ -252,51 +327,12 @@ void ConfigureWindow::drawGizmoViewport() {
         }
     }
 
-    const float yaw = orbitYawDeg_ * kDegToRad;
-    const float pitch = orbitPitchDeg_ * kDegToRad;
-    const Eigen::Vector3f eye =
-        orbitDistance_ * Eigen::Vector3f(std::cos(pitch) * std::sin(yaw),
-                                         std::sin(pitch),
-                                         std::cos(pitch) * std::cos(yaw));
+    const Eigen::Vector3f eye = eyePosition();
     const Eigen::Matrix4f view =
         lookAt(eye, Eigen::Vector3f::Zero(), Eigen::Vector3f::UnitY());
     const Eigen::Matrix4f proj = perspective(
-        45.0f * kDegToRad, canvasSize.x / canvasSize.y, 0.05f, 100.0f);
+        kViewportFovYDeg * kDegToRad, canvasSize.x / canvasSize.y, 0.05f, 100.0f);
     const Eigen::Matrix4f viewProj = proj * view;
-
-    // Reference: the tracked image's plane (width 1, matching the tracker's
-    // convention; models are placed relative to this quad).
-    const float halfH = 0.5f * imagePlaneAspect();
-    const Eigen::Vector3f corners[4] = {{-0.5f, halfH, 0.0f},
-                                        {0.5f, halfH, 0.0f},
-                                        {0.5f, -halfH, 0.0f},
-                                        {-0.5f, -halfH, 0.0f}};
-    ImVec2 screen[4];
-    bool visible = true;
-    for (int i = 0; i < 4; ++i) {
-        visible &= projectToScreen(viewProj, corners[i], canvasPos, canvasSize,
-                                   screen[i]);
-    }
-    if (visible) {
-        drawList->AddQuadFilled(screen[0], screen[1], screen[2], screen[3],
-                                IM_COL32(90, 140, 200, 40));
-        drawList->AddQuad(screen[0], screen[1], screen[2], screen[3],
-                          IM_COL32(120, 170, 230, 180), 1.5f);
-    }
-    // Image-plane axes: X red, Y green (matches the tracker's frame).
-    ImVec2 origin;
-    ImVec2 axisEnd;
-    if (projectToScreen(viewProj, Eigen::Vector3f::Zero(), canvasPos, canvasSize,
-                        origin)) {
-        if (projectToScreen(viewProj, {0.25f, 0.0f, 0.0f}, canvasPos, canvasSize,
-                            axisEnd)) {
-            drawList->AddLine(origin, axisEnd, IM_COL32(230, 90, 90, 200), 2.0f);
-        }
-        if (projectToScreen(viewProj, {0.0f, 0.25f, 0.0f}, canvasPos, canvasSize,
-                            axisEnd)) {
-            drawList->AddLine(origin, axisEnd, IM_COL32(90, 210, 90, 200), 2.0f);
-        }
-    }
 
     // Keep manipulating one cached matrix for the whole drag instead of
     // rebuilding it from the decomposed Euler angles every frame: Euler
@@ -306,8 +342,44 @@ void ConfigureWindow::drawGizmoViewport() {
         gizmoMatrix_ = working_.toMatrix();
     }
 
-    // The model proxy reflects the live matrix, so scale edits are visible.
-    drawModelProxy(drawList, viewProj, gizmoMatrix_, canvasPos, canvasSize);
+    if (!showedPreview) {
+        // Schematic fallback: image-plane outline, axes and a proxy cube.
+        const float halfH = 0.5f * imagePlaneAspect();
+        const Eigen::Vector3f corners[4] = {{-0.5f, halfH, 0.0f},
+                                            {0.5f, halfH, 0.0f},
+                                            {0.5f, -halfH, 0.0f},
+                                            {-0.5f, -halfH, 0.0f}};
+        ImVec2 screen[4];
+        bool visible = true;
+        for (int i = 0; i < 4; ++i) {
+            visible &= projectToScreen(viewProj, corners[i], canvasPos,
+                                       canvasSize, screen[i]);
+        }
+        if (visible) {
+            drawList->AddQuadFilled(screen[0], screen[1], screen[2], screen[3],
+                                    IM_COL32(90, 140, 200, 40));
+            drawList->AddQuad(screen[0], screen[1], screen[2], screen[3],
+                              IM_COL32(120, 170, 230, 180), 1.5f);
+        }
+        // Image-plane axes: X red, Y green (matches the tracker's frame).
+        ImVec2 origin;
+        ImVec2 axisEnd;
+        if (projectToScreen(viewProj, Eigen::Vector3f::Zero(), canvasPos,
+                            canvasSize, origin)) {
+            if (projectToScreen(viewProj, {0.25f, 0.0f, 0.0f}, canvasPos,
+                                canvasSize, axisEnd)) {
+                drawList->AddLine(origin, axisEnd, IM_COL32(230, 90, 90, 200),
+                                  2.0f);
+            }
+            if (projectToScreen(viewProj, {0.0f, 0.25f, 0.0f}, canvasPos,
+                                canvasSize, axisEnd)) {
+                drawList->AddLine(origin, axisEnd, IM_COL32(90, 210, 90, 200),
+                                  2.0f);
+            }
+        }
+        // The model proxy reflects the live matrix, so scale edits show.
+        drawModelProxy(drawList, viewProj, gizmoMatrix_, canvasPos, canvasSize);
+    }
 
     ImGuizmo::SetOrthographic(false);
     ImGuizmo::SetDrawlist(drawList);

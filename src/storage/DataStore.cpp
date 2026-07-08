@@ -55,6 +55,24 @@ bool DataStore::removeImage(Id imageId) {
     return true;
 }
 
+bool DataStore::setImageFilePath(Id imageId, const std::string& filePath) {
+    const auto it = images_.find(imageId);
+    if (it == images_.end()) {
+        return false;
+    }
+    it->second.filePath = filePath;
+    return true;
+}
+
+bool DataStore::setModelFilePath(Id modelId, const std::string& filePath) {
+    const auto it = models_.find(modelId);
+    if (it == models_.end()) {
+        return false;
+    }
+    it->second.filePath = filePath;
+    return true;
+}
+
 const ImageAsset* DataStore::image(Id imageId) const {
     const auto it = images_.find(imageId);
     return it == images_.end() ? nullptr : &it->second;

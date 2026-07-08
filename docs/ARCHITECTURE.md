@@ -62,9 +62,12 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
   defaulting to identity when omitted); `persistAssignment()` writes a saved
   pose back into the cfg surgically (other lines and comments are preserved),
   which the Configure window's Save triggers for library assets - poses
-  therefore survive restarts. The FBX check is injected as a callback so the
-  storage layer stays free of render dependencies (the app passes
-  `ModelLoader::validateModelFile`).
+  therefore survive restarts. `saveSession()` (the Upload window's "Save
+  session to library" button) copies externally-uploaded files into the
+  library folders, re-points the store at the copies and writes every
+  assignment + pose to the cfg, making the whole session restorable. The FBX
+  check is injected as a callback so the storage layer stays free of render
+  dependencies (the app passes `ModelLoader::validateModelFile`).
 
 This layer is fully unit-tested in `tests/` and builds as the `avb_storage`
 library with no UI dependencies, so CI can run it headless.
@@ -81,10 +84,13 @@ library with no UI dependencies, so CI can run it headless.
   - models must pass `ModelLoader::validateModelFile` (an Assimp parse that
     requires at least one non-empty mesh) before they are added.
 - `ConfigureWindow` — edits a working copy of an assignment's `Transform` and
-  commits it on Save. Editing is interactive first: an ImGuizmo viewport shows
-  the image plane (correct aspect ratio, axes) and the model's pose as a
-  translate/rotate/scale gizmo; right-drag orbits, the wheel zooms. Numeric
-  drag fields remain below for exact values, plus a collapsible matrix preview.
+  commits it on Save. The viewport shows the assignment's actual image and
+  model (ConfigurePreview's off-screen render as the background) with the
+  ImGuizmo translate/rotate/scale gizmo on top, sharing one camera so the
+  handles line up with the rendered pixels; right-drag orbits, the wheel
+  zooms. Numeric drag fields and the matrix preview sit above the viewport.
+  Falls back to a schematic plane + proxy cube when the render is
+  unavailable.
 - `CameraWindow` — pairs the newest captured frame with the newest tracking
   result, drives the OGRE composite and displays it **letterboxed** (uniform
   scale, never stretched). Shows capture/tracking FPS, tracked-target count
@@ -135,6 +141,11 @@ library with no UI dependencies, so CI can run it headless.
   without an extra OS window), owns the scene manager, and initialises the RTSS
   shader generator (with a scheme-not-found resolver) so default materials
   render under the GL3+ shader-only pipeline.
+- `ConfigurePreview` — renders the Configure window's viewport content (the
+  assignment's image as a textured plane plus its model at the working
+  transform) into an off-screen target. Shares the scene manager with
+  SceneRenderer; the two renders are isolated per viewport with visibility
+  masks (`kMainSceneVisibilityMask` / `kConfigPreviewVisibilityMask`).
 - `ModelLoader` — imports FBX via Assimp and builds a cached `Ogre::Mesh` from an
   `Ogre::ManualObject` (positions/normals/UVs/indices), assigning a shared
   default lit material. OGRE has no native FBX importer. Also provides the
@@ -193,6 +204,13 @@ Hand-off points are small and lock-scoped: the newest frame (copied out under
 a mutex), the newest filtered detection list, and the mutex-guarded target set
 inside `ImageTracker`. The `DataStore` itself is only ever touched from the
 main thread.
+
+GL context discipline (all on the main thread): OGRE and SDL each cache which
+GL context they believe is current and skip "redundant" switches, but neither
+sees switches the other performs. Every OGRE render section therefore starts
+with `OgreContext::makeRenderContextCurrent()` (a forced GLContext bind), and
+every `Window` render pass re-binds its SDL context through a clear-then-bind
+pair so SDL's cache can't turn the switch into a no-op.
 
 **Does the Camera window size affect tracking?** No. Detection always runs on
 the raw camera frames from the capture thread; the window only receives the

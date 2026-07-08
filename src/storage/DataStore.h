@@ -38,6 +38,12 @@ public:
     const ImageAsset* image(Id imageId) const;
     std::vector<Id> imageIds() const;
 
+    /// Repoints an asset at a different file on disk (name and any decoded
+    /// pixels stay untouched). Used when the asset library copies an external
+    /// file into its folders so future pose persistence can resolve it.
+    bool setImageFilePath(Id imageId, const std::string& filePath);
+    bool setModelFilePath(Id modelId, const std::string& filePath);
+
     /// Monotonic counter bumped whenever the image set (or an image's decoded
     /// pixels) changes. Lets consumers such as the tracker's target list detect
     /// staleness cheaply and exactly - unlike comparing imageIds().size(),

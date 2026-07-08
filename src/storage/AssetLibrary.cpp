@@ -387,4 +387,81 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
     return file.good();
 }
 
+AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
+    const std::string& rootDir) {
+    SessionSaveResult result;
+    const fs::path root(rootDir);
+    std::error_code ec;
+    fs::create_directories(root / "images", ec);
+    fs::create_directories(root / "models", ec);
+
+    // Copies `filePath` (named `name`) into the library subfolder unless a
+    // file of that name is already there; returns the library path to use, or
+    // empty on failure.
+    const auto bringIntoLibrary = [&](const std::string& filePath,
+                                      const std::string& name,
+                                      const char* subdir) -> std::string {
+        const fs::path dst = root / subdir / name;
+        std::error_code fec;
+        if (fs::exists(dst, fec)) {
+            // A file of this name is already in the library; it wins (names
+            // are the identity the cfg resolves by). Flag likely mismatches.
+            std::error_code sec;
+            const auto srcSize = fs::file_size(filePath, sec);
+            const auto dstSize = fs::file_size(dst, fec);
+            if (!sec && !fec && srcSize != dstSize) {
+                result.warnings.push_back(
+                    "'" + name + "' already exists in the library with "
+                    "different content; the library version is kept");
+            }
+            return dst.string();
+        }
+        if (!fs::copy_file(filePath, dst, fec) || fec) {
+            result.warnings.push_back("could not copy '" + name +
+                                      "' into the library: " + fec.message());
+            return "";
+        }
+        ++result.filesCopied;
+        return dst.string();
+    };
+
+    for (const Id id : store_->imageIds()) {
+        const ImageAsset* img = store_->image(id);
+        if (!img || isInLibraryFolder(img->filePath, root, "images")) {
+            continue;
+        }
+        const std::string libraryPath =
+            bringIntoLibrary(img->filePath, img->name, "images");
+        if (!libraryPath.empty()) {
+            store_->setImageFilePath(id, libraryPath);
+        }
+    }
+    for (const Id id : store_->modelIds()) {
+        const ModelAsset* model = store_->model(id);
+        if (!model || isInLibraryFolder(model->filePath, root, "models")) {
+            continue;
+        }
+        const std::string libraryPath =
+            bringIntoLibrary(model->filePath, model->name, "models");
+        if (!libraryPath.empty()) {
+            store_->setModelFilePath(id, libraryPath);
+        }
+    }
+
+    for (const Id assignmentId : store_->assignmentIds()) {
+        if (persistAssignment(rootDir, assignmentId)) {
+            ++result.assignmentsSaved;
+        } else {
+            const Assignment* a = store_->assignment(assignmentId);
+            const ModelAsset* model = a ? store_->model(a->modelId) : nullptr;
+            const ImageAsset* image = a ? store_->image(a->imageId) : nullptr;
+            result.warnings.push_back(
+                "assignment '" + (model ? model->name : "?") + " = " +
+                (image ? image->name : "?") +
+                "' could not be saved (its files are not in the library)");
+        }
+    }
+    return result;
+}
+
 } // namespace avb

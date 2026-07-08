@@ -38,6 +38,7 @@ add_executable(AugmentedVisionBonus2
     ui/UploadWindow.cpp
     ui/ConfigureWindow.cpp
     ui/CameraWindow.cpp
+    render/ConfigurePreview.cpp
     render/OgreContext.cpp
     render/ModelLoader.cpp
     render/SceneRenderer.cpp

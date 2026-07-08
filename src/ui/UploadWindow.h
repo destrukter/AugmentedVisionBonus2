@@ -22,8 +22,11 @@ class UploadWindow : public Window {
 public:
     /// Invoked when the user clicks "Configure" on an assignment.
     using ConfigureCallback = std::function<void(Id assignmentId)>;
+    /// Invoked when the user clicks "Save session to library".
+    using SaveSessionCallback = std::function<void()>;
 
-    UploadWindow(std::shared_ptr<DataStore> store, ConfigureCallback onConfigure);
+    UploadWindow(std::shared_ptr<DataStore> store, ConfigureCallback onConfigure,
+                 SaveSessionCallback onSaveSession = {});
 
     /// Sets the status line shown under the upload buttons. Also used by the
     /// Application to surface the startup asset-library summary.
@@ -42,6 +45,7 @@ private:
 
     std::shared_ptr<DataStore> store_;
     ConfigureCallback onConfigure_;
+    SaveSessionCallback onSaveSession_;
 
     // Transient UI selection state.
     Id selectedImage_{kInvalidId};

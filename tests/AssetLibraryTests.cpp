@@ -304,6 +304,62 @@ static void test_persist_rejects_non_library_assets() {
     CHECK(!loader.persistAssignment(lib.root.string(), aid));
 }
 
+static void test_save_session_copies_external_files_and_persists() {
+    TempLibrary lib;
+    // External assets living outside the library folders.
+    const fs::path ext =
+        fs::temp_directory_path() /
+        ("avb_session_ext_" + std::to_string(std::rand()));
+    fs::create_directories(ext);
+    {
+        cv::Mat img(64, 64, CV_8UC3);
+        cv::RNG rng(5);
+        rng.fill(img, cv::RNG::UNIFORM, 0, 256);
+        cv::imwrite((ext / "poster.png").string(), img);
+        std::ofstream((ext / "robot.fbx").string()) << "fake fbx";
+    }
+
+    auto store = std::make_shared<DataStore>();
+    const Id img = store->addImage((ext / "poster.png").string());
+    store->loadImagePixels(img);
+    const Id mdl = store->addModel((ext / "robot.fbx").string());
+    const Id aid = store->assign(mdl, img);
+    Transform pose;
+    pose.translation = Eigen::Vector3f(0.0f, 0.3f, 0.0f);
+    pose.scale = Eigen::Vector3f(2.0f, 2.0f, 2.0f);
+    store->setTransform(aid, pose);
+
+    AssetLibrary loader(store, stubValidator);
+    const AssetLibrary::SessionSaveResult saved =
+        loader.saveSession(lib.root.string());
+    CHECK(saved.filesCopied == 2);
+    CHECK(saved.assignmentsSaved == 1);
+    CHECK(saved.warnings.empty());
+    CHECK(fs::exists(lib.root / "images" / "poster.png"));
+    CHECK(fs::exists(lib.root / "models" / "robot.fbx"));
+    // The store now points at the library copies, so subsequent per-save
+    // persistence works too.
+    CHECK(store->image(img)->filePath.find(lib.root.string()) == 0);
+    CHECK(store->model(mdl)->filePath.find(lib.root.string()) == 0);
+
+    // A fresh start restores the whole session, pose included.
+    auto store2 = std::make_shared<DataStore>();
+    AssetLibrary loader2(store2, stubValidator);
+    const AssetLibrary::Report report = loader2.load(lib.root.string());
+    CHECK(report.imagesAdded == 1);
+    CHECK(report.modelsAdded == 1);
+    const auto aid2 = store2->findAssignment(modelByName(*store2, "robot.fbx"),
+                                             imageByName(*store2, "poster.png"));
+    CHECK(aid2.has_value());
+    if (aid2) {
+        const auto restored = store2->transform(*aid2);
+        CHECK(restored->translation.isApprox(pose.translation, 1e-4f));
+        CHECK(restored->scale.isApprox(pose.scale, 1e-4f));
+    }
+
+    fs::remove_all(ext);
+}
+
 static void test_missing_root_is_not_an_error() {
     auto store = std::make_shared<DataStore>();
     AssetLibrary loader(store, stubValidator);
@@ -326,5 +382,6 @@ void run_assetlibrary_tests() {
     test_persisted_pose_survives_reload();
     test_persist_identity_writes_bare_pair();
     test_persist_rejects_non_library_assets();
+    test_save_session_copies_external_files_and_persists();
     test_missing_root_is_not_an_error();
 }
