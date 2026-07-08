@@ -1,27 +1,197 @@
 #include "render/ModelLoader.h"
 
+#include <algorithm>
+#include <filesystem>
+#include <string>
+
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+
+#include <OgreHardwarePixelBuffer.h>
+#include <OgreLogManager.h>
 #include <OgreManualObject.h>
 #include <OgreMaterial.h>
 #include <OgreMaterialManager.h>
 #include <OgreMesh.h>
+#include <OgrePass.h>
 #include <OgreResourceGroupManager.h>
 #include <OgreSceneManager.h>
 #include <OgreTechnique.h>
+#include <OgreTextureManager.h>
+#include <OgreTextureUnitState.h>
 
 #include "render/OgreContext.h"
 
 namespace avb {
 
 namespace {
+
+namespace fs = std::filesystem;
+
 constexpr const char* kDefaultMaterial = "avb/DefaultLit";
 // Read lazily inside functions to avoid static-init-order issues with OGRE.
 const Ogre::String& defaultGroup() {
     return Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
 }
+
+/// Creates an OGRE texture named `name` from OpenCV pixels (any of gray /
+/// BGR / BGRA, 8- or 16-bit). Decoding through OpenCV means no OGRE image
+/// codec plugin is required. Returns false when the pixels are unusable.
+bool createTextureFromMat(const std::string& name, cv::Mat img) {
+    auto& tm = Ogre::TextureManager::getSingleton();
+    if (tm.getByName(name, defaultGroup())) {
+        return true;
+    }
+    if (img.empty()) {
+        return false;
+    }
+    if (img.depth() != CV_8U) {
+        const double scale = img.depth() == CV_16U ? 255.0 / 65535.0 : 255.0;
+        img.convertTo(img, CV_8U, scale);
+    }
+    cv::Mat rgba;
+    switch (img.channels()) {
+        case 1: cv::cvtColor(img, rgba, cv::COLOR_GRAY2RGBA); break;
+        case 3: cv::cvtColor(img, rgba, cv::COLOR_BGR2RGBA); break;
+        case 4: cv::cvtColor(img, rgba, cv::COLOR_BGRA2RGBA); break;
+        default: return false;
+    }
+    Ogre::TexturePtr tex = tm.createManual(
+        name, defaultGroup(), Ogre::TEX_TYPE_2D,
+        static_cast<unsigned int>(rgba.cols), static_cast<unsigned int>(rgba.rows),
+        0, Ogre::PF_BYTE_RGBA, Ogre::TU_DEFAULT);
+    if (!tex) {
+        return false;
+    }
+    const Ogre::PixelBox src(static_cast<unsigned int>(rgba.cols),
+                             static_cast<unsigned int>(rgba.rows), 1,
+                             Ogre::PF_BYTE_RGBA, rgba.data);
+    tex->getBuffer()->blitFromMemory(src);
+    return true;
+}
+
+/// Loads the diffuse texture referenced by `material` - either embedded in
+/// the file (common for FBX) or an external image resolved against the
+/// model's folder - into an OGRE texture named `textureName`. Returns false
+/// when the material has no usable diffuse texture.
+bool loadDiffuseTexture(const aiScene* scene, const aiMaterial* material,
+                        const std::string& modelPath,
+                        const std::string& textureName) {
+    aiString ref;
+    if (material->GetTexture(aiTextureType_DIFFUSE, 0, &ref) != AI_SUCCESS ||
+        ref.length == 0) {
+        return false;
+    }
+
+    if (const aiTexture* embedded = scene->GetEmbeddedTexture(ref.C_Str())) {
+        cv::Mat img;
+        if (embedded->mHeight == 0) {
+            // Compressed blob (png/jpg/...) stored inside the model file.
+            const cv::Mat blob(1, static_cast<int>(embedded->mWidth), CV_8UC1,
+                               const_cast<aiTexel*>(embedded->pcData));
+            img = cv::imdecode(blob, cv::IMREAD_UNCHANGED);
+        } else {
+            // Raw texels; aiTexel's byte order is b,g,r,a.
+            img = cv::Mat(static_cast<int>(embedded->mHeight),
+                          static_cast<int>(embedded->mWidth), CV_8UC4,
+                          const_cast<aiTexel*>(embedded->pcData))
+                      .clone();
+        }
+        if (img.empty()) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "ModelLoader: could not decode embedded texture '" +
+                std::string(ref.C_Str()) + "' of " + modelPath);
+            return false;
+        }
+        return createTextureFromMat(textureName, img);
+    }
+
+    // External file. Exporters frequently store absolute paths from the
+    // authoring machine, so fall back to the bare file name next to the model.
+    const fs::path modelDir = fs::path(modelPath).parent_path();
+    const fs::path given(ref.C_Str());
+    std::error_code ec;
+    fs::path resolved;
+    if (given.is_absolute() && fs::exists(given, ec)) {
+        resolved = given;
+    } else if (fs::exists(modelDir / given, ec)) {
+        resolved = modelDir / given;
+    } else if (fs::exists(modelDir / given.filename(), ec)) {
+        resolved = modelDir / given.filename();
+    }
+    if (resolved.empty()) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "ModelLoader: texture '" + std::string(ref.C_Str()) + "' of " +
+            modelPath + " not found (also tried next to the model file)");
+        return false;
+    }
+    cv::Mat img = cv::imread(resolved.string(), cv::IMREAD_UNCHANGED);
+    if (img.empty()) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "ModelLoader: could not decode texture file " + resolved.string());
+        return false;
+    }
+    return createTextureFromMat(textureName, img);
+}
+
+/// Builds an OGRE material for `materialIndex` of the imported scene,
+/// carrying over the source material's colors, shininess, sidedness and
+/// diffuse texture. Named uniquely per (mesh, material index) and cached in
+/// the MaterialManager.
+std::string buildMaterial(const aiScene* scene, unsigned int materialIndex,
+                          const std::string& meshName,
+                          const std::string& modelPath, bool hasVertexColours) {
+    const std::string name =
+        meshName + "/mat/" + std::to_string(materialIndex);
+    auto& mm = Ogre::MaterialManager::getSingleton();
+    if (mm.getByName(name, defaultGroup())) {
+        return name;
+    }
+    const aiMaterial* src = scene->mMaterials[materialIndex];
+
+    Ogre::MaterialPtr mat = mm.create(name, defaultGroup());
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+    pass->setLightingEnabled(true);
+
+    aiColor3D diffuse(0.8f, 0.8f, 0.82f);
+    src->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse);
+    pass->setDiffuse(diffuse.r, diffuse.g, diffuse.b, 1.0f);
+    // Tie the ambient term to the diffuse color so the scene's ambient light
+    // tints the object its own color instead of washing it gray.
+    pass->setAmbient(diffuse.r, diffuse.g, diffuse.b);
+
+    aiColor3D specular(0.2f, 0.2f, 0.2f);
+    src->Get(AI_MATKEY_COLOR_SPECULAR, specular);
+    float shininess = 20.0f;
+    src->Get(AI_MATKEY_SHININESS, shininess);
+    pass->setSpecular(specular.r, specular.g, specular.b, 1.0f);
+    pass->setShininess(std::clamp(shininess, 1.0f, 128.0f));
+
+    aiColor3D emissive(0.0f, 0.0f, 0.0f);
+    if (src->Get(AI_MATKEY_COLOR_EMISSIVE, emissive) == AI_SUCCESS) {
+        pass->setSelfIllumination(emissive.r, emissive.g, emissive.b);
+    }
+
+    int twoSided = 0;
+    if (src->Get(AI_MATKEY_TWOSIDED, twoSided) == AI_SUCCESS && twoSided) {
+        pass->setCullingMode(Ogre::CULL_NONE);
+    }
+
+    if (hasVertexColours) {
+        pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+    }
+
+    if (loadDiffuseTexture(scene, src, modelPath, name + "/diffuse")) {
+        pass->createTextureUnitState(name + "/diffuse");
+    }
+    // The RTSS (set up by OgreContext) generates the actual shaders.
+    return name;
+}
+
 } // namespace
 
 ModelLoader::ModelLoader(OgreContext& context) : context_(context) {}
@@ -81,13 +251,13 @@ std::string ModelLoader::loadFbx(const std::string& filePath,
     const aiScene* scene = importer.ReadFile(
         filePath, aiProcess_Triangulate | aiProcess_GenSmoothNormals |
                       aiProcess_FlipUVs | aiProcess_JoinIdenticalVertices |
-                      aiProcess_PreTransformVertices);
+                      aiProcess_PreTransformVertices |
+                      aiProcess_TransformUVCoords);
     if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) ||
         !scene->mRootNode || scene->mNumMeshes == 0) {
         return "";
     }
 
-    const std::string material = ensureDefaultMaterial();
     Ogre::SceneManager* sm = context_.sceneManager();
     Ogre::ManualObject* manual = sm->createManualObject();
     manual->setDynamic(false);
@@ -97,7 +267,20 @@ std::string ModelLoader::loadFbx(const std::string& filePath,
         if (mesh->mNumVertices == 0) {
             continue;
         }
-        manual->begin(material, Ogre::RenderOperation::OT_TRIANGLE_LIST, defaultGroup());
+        const bool hasColours = mesh->HasVertexColors(0);
+        // One section per aiMesh, carrying its own material from the file
+        // (colors + diffuse texture); fall back to the shared default when
+        // the file has no material for it.
+        std::string material;
+        if (mesh->mMaterialIndex < scene->mNumMaterials) {
+            material = buildMaterial(scene, mesh->mMaterialIndex, meshName,
+                                     filePath, hasColours);
+        }
+        if (material.empty()) {
+            material = ensureDefaultMaterial();
+        }
+        manual->begin(material, Ogre::RenderOperation::OT_TRIANGLE_LIST,
+                      defaultGroup());
 
         const bool hasUv = mesh->HasTextureCoords(0);
         for (unsigned int v = 0; v < mesh->mNumVertices; ++v) {
@@ -110,6 +293,10 @@ std::string ModelLoader::loadFbx(const std::string& filePath,
             if (hasUv) {
                 const aiVector3D& t = mesh->mTextureCoords[0][v];
                 manual->textureCoord(t.x, t.y);
+            }
+            if (hasColours) {
+                const aiColor4D& c = mesh->mColors[0][v];
+                manual->colour(c.r, c.g, c.b, c.a);
             }
         }
         // Indices are local to this section (one section per aiMesh).

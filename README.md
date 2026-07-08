@@ -58,7 +58,9 @@ by one shared in-memory data store (see `src/storage`).
    - Capture and tracking run on background threads, so the feed stays smooth
      regardless of detection cost, and the newest frame is always shown.
    - When a tracked image is detected, the FBX models assigned to it are rendered
-     (OGRE3D) at their configured pose. The feed is displayed letterboxed —
+     (OGRE3D) at their configured pose — with their own materials: colors,
+     shininess, vertex colors and diffuse textures (embedded in the FBX or
+     referenced image files next to it). The feed is displayed letterboxed —
      resizing the window never warps the image or affects tracking.
 
 ## Default asset library (auto-upload at startup)

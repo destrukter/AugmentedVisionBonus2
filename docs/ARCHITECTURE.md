@@ -146,10 +146,14 @@ library with no UI dependencies, so CI can run it headless.
   transform) into an off-screen target. Shares the scene manager with
   SceneRenderer; the two renders are isolated per viewport with visibility
   masks (`kMainSceneVisibilityMask` / `kConfigPreviewVisibilityMask`).
-- `ModelLoader` — imports FBX via Assimp and builds a cached `Ogre::Mesh` from an
-  `Ogre::ManualObject` (positions/normals/UVs/indices), assigning a shared
-  default lit material. OGRE has no native FBX importer. Also provides the
-  static `validateModelFile()` used by the Upload window.
+- `ModelLoader` — imports FBX via Assimp and builds a cached `Ogre::Mesh` from
+  an `Ogre::ManualObject` (positions/normals/UVs/vertex colors/indices),
+  carrying the file's materials along: per-submesh diffuse/specular/emissive
+  colors, shininess, two-sidedness and diffuse textures - both embedded (FBX)
+  and external image files (resolved next to the model), decoded through
+  OpenCV so no OGRE codec plugin is needed. Submeshes without a usable
+  material fall back to a shared default. OGRE has no native FBX importer.
+  Also provides the static `validateModelFile()` used by the Upload window.
 - `SceneRenderer` — renders the assigned models (over a transparent background)
   into an off-screen render texture, reads the RGBA result back to the CPU, and
   composites it over the camera frame. Notes:
@@ -172,8 +176,9 @@ library with no UI dependencies, so CI can run it headless.
     overlays drift near the frame edges;
   - when no model is visible in a frame, the OGRE pass and GPU read-back are
     skipped entirely and the feed is passed through;
-  - compositing keys on the clear colour with vectorized OpenCV ops (masked
-    copy) instead of a per-pixel loop.
+  - compositing keys on an exact chroma-key clear colour (1, 0, 255) with
+    vectorized OpenCV ops (masked copy) - a colour lit geometry essentially
+    never produces, so even pure-black materials composite correctly.
 
 #### Why CPU read-back?
 

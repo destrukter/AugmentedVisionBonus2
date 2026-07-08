@@ -11,7 +11,11 @@ class OgreContext;
 ///
 /// OGRE has no native FBX importer, so Assimp parses the file and the resulting
 /// vertex/index data is fed into an Ogre::ManualObject which is converted into a
-/// cached Ogre::Mesh that the SceneRenderer can instantiate.
+/// cached Ogre::Mesh that the SceneRenderer can instantiate. The file's
+/// materials come along: per-submesh diffuse/specular/emissive colors,
+/// shininess, two-sidedness, vertex colors and diffuse textures (embedded or
+/// external, decoded through OpenCV so no OGRE codec plugin is needed).
+/// Submeshes without a usable material fall back to a shared default.
 class ModelLoader {
 public:
     explicit ModelLoader(OgreContext& context);

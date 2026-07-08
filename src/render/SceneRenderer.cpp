@@ -90,7 +90,10 @@ bool SceneRenderer::createRenderTarget(int width, int height) {
     height_ = height;
     renderTarget_ = rtt->getBuffer()->getRenderTarget();
     Ogre::Viewport* vp = renderTarget_->addViewport(camera_);
-    vp->setBackgroundColour(Ogre::ColourValue(0, 0, 0, 0)); // transparent
+    // Clear to the exact chroma-key color the compositor tests for (bytes
+    // R=1, G=0, B=255) - a color lit geometry essentially never produces, so
+    // even pure-black materials survive compositing. See endFrame().
+    vp->setBackgroundColour(Ogre::ColourValue(1.0f / 255.0f, 0.0f, 1.0f, 0.0f));
     vp->setClearEveryFrame(true);
     vp->setOverlaysEnabled(false);
     // Route this viewport's material lookups through the RTSS scheme so
@@ -296,19 +299,16 @@ void SceneRenderer::endFrame() {
 
     // Composite the rendered overlay over the camera background.
     //
-    // We key on the overlay's RGB (the clear colour) rather than its alpha
-    // channel. The off-screen render target is cleared to transparent black, but
-    // many Linux GL drivers hand the FBO's alpha channel back as fully opaque
-    // (255) everywhere through copyContentsToMemory. With a straight-alpha
-    // composite that would blend the overlay's black clear colour over the whole
-    // camera frame and blank the feed entirely. Treating pure-black overlay
-    // pixels as "nothing drawn here" keeps the camera visible wherever no model
-    // was rendered, regardless of how the driver reports alpha; rendered model
-    // pixels are lit and therefore non-black. Models are opaque, so a masked
-    // copy replaces the old per-pixel alpha blend (SIMD via OpenCV instead of
-    // a scalar loop over every pixel).
-    cv::Mat clearMask; // 255 where the overlay is pure black in RGB (any alpha)
-    cv::inRange(overlay, cv::Scalar(0, 0, 0, 0), cv::Scalar(0, 0, 0, 255),
+    // We key on the overlay's RGB (the exact clear colour set in
+    // createRenderTarget) rather than its alpha channel: many Linux GL
+    // drivers hand the FBO's alpha back as constant through
+    // copyContentsToMemory, which would either blank the feed or the models.
+    // The key colour (1, 0, 255) is one lit geometry essentially never
+    // produces exactly, so even pure-black materials composite correctly.
+    // Models are opaque, so a masked copy replaces a per-pixel alpha blend
+    // (SIMD via OpenCV instead of a scalar loop over every pixel).
+    cv::Mat clearMask; // 255 where the overlay is the key colour (any alpha)
+    cv::inRange(overlay, cv::Scalar(1, 0, 255, 0), cv::Scalar(1, 0, 255, 255),
                 clearMask);
     cv::bitwise_not(clearMask, drawnMask_);
     overlay.copyTo(composited_, drawnMask_);
