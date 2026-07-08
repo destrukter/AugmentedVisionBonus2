@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "ui/Window.h"
+#include "vision/CameraCapture.h"  // CameraDeviceInfo
 
 namespace avb {
 
@@ -68,6 +70,7 @@ private:
     int texHeight_{0};
     std::uint64_t lastImageRevision_{0};  // triggers tracker refresh on change
     int detectionCount_{0};               // detections used for the last render
+    std::vector<CameraDeviceInfo> devices_;  // selector entries (rescanned on open)
     bool previewWhenUntracked_{true};
     bool showTrackingOutline_{true}; // debug rectangle around tracked targets
 };

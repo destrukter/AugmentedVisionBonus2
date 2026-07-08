@@ -54,13 +54,22 @@ public:
     /// Asks the worker to close and reopen the device (e.g. after replugging).
     void requestReconnect() { reconnect_.store(true); wake_.notify_all(); }
 
+    /// Switches to a different capture device; the worker reopens it in the
+    /// background (no-op when `index` is already the active device).
+    void setDevice(int index) {
+        if (deviceIndex_.exchange(index) != index) {
+            requestReconnect();
+        }
+    }
+    int device() const { return deviceIndex_.load(); }
+
 private:
     void run();
     /// Interruptible sleep; returns false when stop() was requested.
     bool sleepFor(int ms);
 
     std::shared_ptr<CameraCapture> capture_;
-    const int deviceIndex_;
+    std::atomic<int> deviceIndex_;
 
     std::thread thread_;
     std::atomic<bool> running_{false};

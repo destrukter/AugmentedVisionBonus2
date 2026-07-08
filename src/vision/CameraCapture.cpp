@@ -1,8 +1,56 @@
 #include "vision/CameraCapture.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+
 #include <opencv2/core/utils/logger.hpp>
 
 namespace avb {
+
+std::vector<CameraDeviceInfo> CameraCapture::listDevices() {
+    std::vector<CameraDeviceInfo> devices;
+#ifdef __linux__
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    for (fs::directory_iterator it("/dev", ec), end; !ec && it != end;
+         it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        if (name.rfind("video", 0) != 0) {
+            continue;
+        }
+        const std::string digits = name.substr(5);
+        if (digits.empty() ||
+            digits.find_first_not_of("0123456789") != std::string::npos) {
+            continue;
+        }
+        CameraDeviceInfo info;
+        info.index = std::atoi(digits.c_str());
+        // Driver-reported name, e.g. "Integrated Camera: Integrated C".
+        std::ifstream sysName("/sys/class/video4linux/" + name + "/name");
+        std::getline(sysName, info.name);
+        while (!info.name.empty() &&
+               (info.name.back() == '\n' || info.name.back() == '\r')) {
+            info.name.pop_back();
+        }
+        if (info.name.empty()) {
+            info.name = "Camera " + digits;
+        }
+        devices.push_back(std::move(info));
+    }
+    std::sort(devices.begin(), devices.end(),
+              [](const CameraDeviceInfo& a, const CameraDeviceInfo& b) {
+                  return a.index < b.index;
+              });
+#else
+    // No cheap enumeration API; offer the first few indices generically.
+    for (int i = 0; i < 4; ++i) {
+        devices.push_back({i, "Camera " + std::to_string(i)});
+    }
+#endif
+    return devices;
+}
 
 bool CameraCapture::open(int deviceIndex) {
     // On Linux, OpenCV's default backend (GStreamer) can open a UVC webcam and

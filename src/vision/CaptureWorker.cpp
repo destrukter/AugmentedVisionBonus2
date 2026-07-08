@@ -82,7 +82,7 @@ void CaptureWorker::run() {
         }
 
         if (!capture_->isOpen()) {
-            cameraOpen_.store(capture_->open(deviceIndex_));
+            cameraOpen_.store(capture_->open(deviceIndex_.load()));
             if (!cameraOpen_.load()) {
                 if (!sleepFor(kRetryDelayMs)) {
                     break;

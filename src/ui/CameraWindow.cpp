@@ -17,6 +17,7 @@
 #include "storage/Assets.h"
 #include "storage/DataStore.h"
 #include "ui/Panels.h"
+#include "vision/CameraCapture.h"
 #include "vision/CaptureWorker.h"
 #include "vision/ImageTracker.h"
 #include "vision/TrackingWorker.h"
@@ -65,7 +66,8 @@ CameraWindow::CameraWindow(std::shared_ptr<DataStore> store,
       capture_(std::move(capture)),
       tracking_(std::move(tracking)),
       tracker_(std::move(tracker)),
-      renderer_(std::move(renderer)) {}
+      renderer_(std::move(renderer)),
+      devices_(CameraCapture::listDevices()) {}
 
 CameraWindow::~CameraWindow() {
     if (glTexture_ != 0) {
@@ -101,17 +103,46 @@ void CameraWindow::drawUi() {
     // which would grow with every scroll inside a scrolling window.
     beginFullWindow("Camera", /*allowScroll=*/false);
 
+    // Device selector: the list is rescanned every frame the combo is open,
+    // so replugging a camera shows up without restarting.
+    if (capture_) {
+        const int current = capture_->device();
+        std::string currentLabel = std::to_string(current) + ": Camera";
+        for (const CameraDeviceInfo& dev : devices_) {
+            if (dev.index == current) {
+                currentLabel = std::to_string(dev.index) + ": " + dev.name;
+                break;
+            }
+        }
+        ImGui::SetNextItemWidth(260.0f);
+        if (ImGui::BeginCombo("##camera_device", currentLabel.c_str())) {
+            devices_ = CameraCapture::listDevices();
+            if (devices_.empty()) {
+                ImGui::TextDisabled("No cameras found");
+            }
+            for (const CameraDeviceInfo& dev : devices_) {
+                const std::string label =
+                    std::to_string(dev.index) + ": " + dev.name;
+                if (ImGui::Selectable(label.c_str(), dev.index == current)) {
+                    capture_->setDevice(dev.index);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reconnect")) {
+            capture_->requestReconnect();
+        }
+        ImGui::SameLine();
+    }
+
     const bool camOpen = capture_ && capture_->cameraOpen();
     if (camOpen) {
-        ImGui::Text("Camera: connected  |  feed %.0f fps  |  tracking %.0f fps",
+        ImGui::Text("connected | feed %.0f fps | tracking %.0f fps",
                     capture_->fps(), tracking_ ? tracking_->fps() : 0.0);
     } else {
         ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.3f, 1.0f),
-                           "Camera: no device (retrying...)");
-        ImGui::SameLine();
-        if (ImGui::Button("Reconnect") && capture_) {
-            capture_->requestReconnect();
-        }
+                           "no device (retrying...)");
     }
     ImGui::SameLine();
     ImGui::Text("| Images: %zu | Tracked now: %d", store_->imageIds().size(),

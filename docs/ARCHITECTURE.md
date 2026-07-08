@@ -88,12 +88,15 @@ library with no UI dependencies, so CI can run it headless.
 - `CameraWindow` — pairs the newest captured frame with the newest tracking
   result, drives the OGRE composite and displays it **letterboxed** (uniform
   scale, never stretched). Shows capture/tracking FPS, tracked-target count
-  and a Reconnect button when no camera is available.
+  a device-selector dropdown (switching reopens the camera on the capture
+  thread) and a Reconnect button.
 
 ### `src/vision` — OpenCV (all UI-free, built as `avb_vision`)
 
 - `CameraCapture` — wraps `cv::VideoCapture`; configures the device for low
-  latency (MJPG, 720p@30, driver queue of 1 frame).
+  latency (MJPG, 720p@30, driver queue of 1 frame). `listDevices()` enumerates
+  attached cameras (Linux: /dev/video* + sysfs names) for the Camera window's
+  device selector.
 - `CaptureWorker` — **capture thread**. Continuously grabs frames and keeps
   only the newest (sequence-numbered) one, so consumers never see a backlog
   and the UI never blocks on the camera. Owns device lifecycle: retries while
@@ -112,6 +115,10 @@ library with no UI dependencies, so CI can run it headless.
     ORB's scale-pyramid range;
   - homographies must map the template to a convex, plausibly sized quad or
     the sighting is rejected (kills the "jumping overlay" misdetections).
+  Out-of-plane robustness: ORB descriptors are rotation- and scale-invariant
+  but not perspective-invariant, so detection degrades with tilt; the
+  guaranteed envelope (regression-tested) is 30 degrees, and ~40-45 degrees
+  works in practice. The recovered pose (IPPE PnP) reflects the tilt.
   All public methods are mutex-guarded so the UI thread can add/remove targets
   while the tracking thread detects.
 - `DetectionFilter` — temporal smoothing: exponential lerp/slerp of poses and

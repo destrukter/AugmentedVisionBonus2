@@ -130,6 +130,59 @@ static void test_downscaled_detection_keeps_fullres_coordinates() {
     CHECK(std::abs(detections[0].corners[2].y - 640.0f) < 40.0f);
 }
 
+// Renders `marker` as if printed on a plane tilted `tiltDeg` about the
+// vertical axis, photographed by a pinhole camera looking straight at it.
+cv::Mat makeTiltedFrame(const cv::Mat& marker, int canvas, double tiltDeg,
+                        std::array<cv::Point2f, 4>& outCorners) {
+    const double f = canvas * 1.2;
+    const double c = canvas * 0.5;
+    const double th = tiltDeg * CV_PI / 180.0;
+    const double dist = 1.6;
+    // Marker spans 0.9x0.9 units; OpenCV camera: X right, Y down, Z forward.
+    const std::array<cv::Point3d, 4> obj = {cv::Point3d{-0.45, -0.45, 0},
+                                            {0.45, -0.45, 0},
+                                            {0.45, 0.45, 0},
+                                            {-0.45, 0.45, 0}};
+    std::array<cv::Point2f, 4> dst;
+    for (int i = 0; i < 4; ++i) {
+        const double xr = obj[i].x * std::cos(th); // rotate about Y
+        const double zr = dist - obj[i].x * std::sin(th);
+        dst[i] = cv::Point2f(static_cast<float>(f * xr / zr + c),
+                             static_cast<float>(f * obj[i].y / zr + c));
+    }
+    const float w = static_cast<float>(marker.cols);
+    const float h = static_cast<float>(marker.rows);
+    const std::array<cv::Point2f, 4> src = {cv::Point2f{0, 0}, {w, 0}, {w, h},
+                                            {0, h}};
+    const cv::Mat H = cv::getPerspectiveTransform(src.data(), dst.data());
+    cv::Mat frame(canvas, canvas, CV_8UC1, cv::Scalar(128));
+    cv::warpPerspective(marker, frame, H, frame.size(), cv::INTER_LINEAR,
+                        cv::BORDER_TRANSPARENT);
+    outCorners = dst;
+    return frame;
+}
+
+// Out-of-plane robustness: a target tilted away from the camera must still be
+// detected and localized. Empirically the ORB pipeline holds up to ~40-45
+// degrees; 30 degrees is asserted here as the guaranteed envelope.
+static void test_detects_tilted_marker() {
+    ImageTracker tracker;
+    const cv::Mat marker = makeBlockNoiseMarker(240, 8, 21);
+    tracker.addTarget(7, marker);
+
+    std::array<cv::Point2f, 4> expected;
+    const cv::Mat frame = makeTiltedFrame(marker, 640, 30.0, expected);
+    const std::vector<Detection> detections = tracker.detect(frame);
+    CHECK(detections.size() == 1);
+    if (detections.empty()) {
+        return;
+    }
+    CHECK(detections[0].imageId == 7);
+    for (int i = 0; i < 4; ++i) {
+        CHECK(cv::norm(detections[0].corners[i] - expected[i]) < 30.0);
+    }
+}
+
 static void test_feature_count_reports_trackability() {
     const cv::Mat rich = makeNoiseMarker(160, 11);
     const cv::Mat blank(160, 160, CV_8UC1, cv::Scalar(200));
@@ -171,6 +224,7 @@ void run_imagetracker_tests() {
     test_detects_synthetic_marker();
     test_ignores_featureless_target();
     test_detects_marker_under_poor_lighting();
+    test_detects_tilted_marker();
     test_downscaled_detection_keeps_fullres_coordinates();
     test_feature_count_reports_trackability();
     test_add_remove_clear_targets();

@@ -44,7 +44,12 @@ by one shared in-memory data store (see `src/storage`).
 3. **Camera window** (`src/ui/CameraWindow`)
    - Streams the camera feed and tracks the uploaded images (OpenCV ORB
      features; contrast-normalised so tracking survives lighting changes,
-     temporally smoothed so poses don't jitter or flicker).
+     temporally smoothed so poses don't jitter or flicker). Targets don't
+     need to face the camera straight on: detection holds up to roughly
+     40 degrees of out-of-plane tilt (and any in-plane rotation), with the
+     estimated pose following the tilt.
+   - A dropdown selects the capture device (on Linux, enumerated from
+     /dev/video* with driver names); Reconnect reopens it after replugging.
    - Capture and tracking run on background threads, so the feed stays smooth
      regardless of detection cost, and the newest frame is always shown.
    - When a tracked image is detected, the FBX models assigned to it are rendered
