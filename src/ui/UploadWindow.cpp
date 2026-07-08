@@ -125,9 +125,24 @@ void UploadWindow::drawUploadSection() {
         if (!img) {
             continue;
         }
-        if (ImGui::Selectable(img->name.c_str(), selectedImage_ == id)) {
+        const std::string name = img->name;
+        ImGui::PushID(static_cast<int>(id));
+        if (ImGui::SmallButton("x")) {
+            // Removes the image and (cascading) its assignments; "Save
+            // session to library" syncs the removal to disk.
+            if (selectedImage_ == id) {
+                selectedImage_ = kInvalidId;
+            }
+            store_->removeImage(id);
+            setStatus(StatusKind::Success, "Removed image '" + name + "'.");
+            ImGui::PopID();
+            continue;
+        }
+        ImGui::SameLine();
+        if (ImGui::Selectable(name.c_str(), selectedImage_ == id)) {
             selectedImage_ = id;
         }
+        ImGui::PopID();
     }
 
     ImGui::NextColumn();
@@ -138,9 +153,22 @@ void UploadWindow::drawUploadSection() {
         if (!model) {
             continue;
         }
-        if (ImGui::Selectable(model->name.c_str(), selectedModel_ == id)) {
+        const std::string name = model->name;
+        ImGui::PushID(static_cast<int>(id));
+        if (ImGui::SmallButton("x")) {
+            if (selectedModel_ == id) {
+                selectedModel_ = kInvalidId;
+            }
+            store_->removeModel(id);
+            setStatus(StatusKind::Success, "Removed model '" + name + "'.");
+            ImGui::PopID();
+            continue;
+        }
+        ImGui::SameLine();
+        if (ImGui::Selectable(name.c_str(), selectedModel_ == id)) {
             selectedModel_ = id;
         }
+        ImGui::PopID();
     }
 
     ImGui::Columns(1);

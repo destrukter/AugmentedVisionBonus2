@@ -63,9 +63,12 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
   pose back into the cfg surgically (other lines and comments are preserved),
   which the Configure window's Save triggers for library assets - poses
   therefore survive restarts. `saveSession()` (the Upload window's "Save
-  session to library" button) copies externally-uploaded files into the
-  library folders, re-points the store at the copies and writes every
-  assignment + pose to the cfg, making the whole session restorable. The FBX
+  session to library" button) fully syncs the library with the session:
+  externally-uploaded files are copied in (store re-pointed at the copies),
+  files of removed assets are moved to `<root>/removed/`, and the cfg is
+  rewritten to exactly the current assignments - stale lines dropped and `!`
+  exclusion lines emitted for reverted stem-matching pairs (load() honours
+  them by skipping auto-pairing), so removals survive restarts too. The FBX
   check is injected as a callback so the storage layer stays free of render
   dependencies (the app passes `ModelLoader::validateModelFile`).
 

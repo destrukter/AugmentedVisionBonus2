@@ -39,6 +39,14 @@ class DataStore;
 /// in the app are written back into these columns via persistAssignment(), so
 /// they survive restarts.
 ///
+/// A line starting with `!` is an exclusion:
+///
+///     ! model-file.fbx = image-file.png
+///
+/// It suppresses the automatic stem pairing for exactly that pair - written
+/// by saveSession() when a name-matching pair was reverted in the app, so the
+/// removal survives restarts too.
+///
 /// Every file is validated the same way a manual upload is (images must
 /// decode; models must pass the injected validator); failures are reported as
 /// warnings instead of silently loading broken assets. The class lives in the
@@ -77,15 +85,23 @@ public:
 
     struct SessionSaveResult {
         int filesCopied{0};
+        int filesRemoved{0};       ///< moved into <root>/removed/
         int assignmentsSaved{0};
         std::vector<std::string> warnings;
     };
 
     /// Saves the whole current session into the library so it is restored on
-    /// the next startup: every image/model whose file lives outside the
-    /// library folders is copied in (and the store re-pointed at the copy),
-    /// then every assignment - including manually created ones - is written
-    /// to assignments.cfg with its pose. Missing library folders are created.
+    /// the next startup - a full sync in both directions:
+    ///  * every image/model whose file lives outside the library folders is
+    ///    copied in (and the store re-pointed at the copy);
+    ///  * library files whose asset was removed from the session are moved
+    ///    into `<root>/removed/` (never deleted outright);
+    ///  * assignments.cfg is rewritten to hold exactly the current
+    ///    assignments with their poses: stale pair lines are dropped, and a
+    ///    `!` exclusion line is written for every name-matching (stem) pair
+    ///    that is currently unassigned, so reverting an auto-paired
+    ///    assignment survives restarts. Comments are preserved.
+    /// Missing library folders are created.
     SessionSaveResult saveSession(const std::string& rootDir);
 
 private:

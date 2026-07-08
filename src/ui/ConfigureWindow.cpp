@@ -199,6 +199,12 @@ void ConfigureWindow::drawUi() {
     // controls permanently out of view).
     beginFullWindow("Configure", /*allowScroll=*/false);
 
+    // The assignment may vanish behind us (reverted, or its image/model was
+    // removed in the Upload window).
+    if (activeAssignment_ != kInvalidId &&
+        store_->assignment(activeAssignment_) == nullptr) {
+        activeAssignment_ = kInvalidId;
+    }
     if (activeAssignment_ == kInvalidId) {
         ImGui::TextDisabled(
             "Click 'Configure' on an assignment in the Upload window.");

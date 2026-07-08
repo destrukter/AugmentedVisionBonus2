@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <set>
 #include <sstream>
 #include <utility>
 
@@ -172,6 +174,11 @@ std::string formatFloat(float v) {
     return buffer;
 }
 
+/// Key identifying a (model, image) pair case-insensitively by file name.
+std::string pairKey(const std::string& modelName, const std::string& imageName) {
+    return toLower(modelName) + "\n" + toLower(imageName);
+}
+
 /// Formats the pose columns written after `|`; empty for the identity pose
 /// (a bare pair line already means "identity"). A uniform scale is written as
 /// a single value, per-axis scales as x,y,z.
@@ -189,6 +196,16 @@ std::string formatPose(const Transform& t) {
            formatFloat(t.rotationEulerDeg.x()) + "," +
            formatFloat(t.rotationEulerDeg.y()) + "," +
            formatFloat(t.rotationEulerDeg.z()) + " s=" + scale;
+}
+
+/// One complete cfg pair line: `model = image [| pose]`.
+std::string formatPairLine(const std::string& modelName,
+                           const std::string& imageName, const Transform& t) {
+    std::string line = modelName + " = " + imageName;
+    if (const std::string pose = formatPose(t); !pose.empty()) {
+        line += " | " + pose;
+    }
+    return line;
 }
 
 /// True when `filePath` is a direct child of `<root>/<subdir>` - i.e. the
@@ -247,7 +264,10 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
         ++report.modelsAdded;
     }
 
-    // Explicit name pairs from assignments.cfg.
+    // Explicit name pairs from assignments.cfg. `!`-prefixed lines are
+    // exclusions: they suppress the automatic stem pairing below (written by
+    // saveSession when a name-matching pair was reverted in the app).
+    std::set<std::string> excludedPairs;
     const fs::path cfgPath = root / "assignments.cfg";
     if (fs::exists(cfgPath, ec)) {
         std::ifstream cfg(cfgPath);
@@ -257,6 +277,21 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
             ++lineNo;
             const std::string stripped = trim(line);
             if (stripped.empty() || stripped[0] == '#') {
+                continue;
+            }
+            if (stripped[0] == '!') {
+                std::string exModel;
+                std::string exImage;
+                std::string exPose;
+                if (splitPairLine(trim(stripped.substr(1)), exModel, exImage,
+                                  exPose)) {
+                    excludedPairs.insert(pairKey(exModel, exImage));
+                } else {
+                    report.warnings.push_back(
+                        "assignments.cfg line " + std::to_string(lineNo) +
+                        ": malformed exclusion, expected "
+                        "'! model-file = image-file', skipped");
+                }
                 continue;
             }
             std::string modelName;
@@ -293,7 +328,7 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
     }
 
     // Automatic pairing: same base name (stem) links a model to an image,
-    // e.g. dragon.fbx <-> dragon.png.
+    // e.g. dragon.fbx <-> dragon.png - unless the pair is excluded.
     for (const Id modelId : store_->modelIds()) {
         const ModelAsset* model = store_->model(modelId);
         if (!model) {
@@ -305,6 +340,9 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
             if (!img ||
                 toLower(fs::path(img->name).stem().string()) != stem) {
                 continue;
+            }
+            if (excludedPairs.count(pairKey(model->name, img->name))) {
+                continue; // reverted in a saved session, keep it unassigned
             }
             if (!store_->findAssignment(modelId, imageId)) {
                 store_->assign(modelId, imageId);
@@ -333,16 +371,14 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
         return false; // not library assets: names would not resolve on restart
     }
 
-    std::string newLine = model->name + " = " + image->name;
-    if (const std::string pose = formatPose(assignment->transform);
-        !pose.empty()) {
-        newLine += " | " + pose;
-    }
+    const std::string newLine =
+        formatPairLine(model->name, image->name, assignment->transform);
 
     // Rewrite only the line(s) for this pair; keep everything else - other
     // pairs, comments, blank lines - byte-for-byte. Duplicate lines for the
     // pair are collapsed into one (load applies them in order, so a stale
-    // duplicate would win over the update otherwise).
+    // duplicate would win over the update otherwise), and an exclusion line
+    // for the pair is dropped since the pair is assigned again.
     const fs::path cfgPath = root / "assignments.cfg";
     std::vector<std::string> lines;
     {
@@ -352,26 +388,29 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
             lines.push_back(line);
         }
     }
-    const std::string wantedModel = toLower(model->name);
-    const std::string wantedImage = toLower(image->name);
+    const std::string wanted = pairKey(model->name, image->name);
     bool replaced = false;
     std::vector<std::string> out;
     out.reserve(lines.size() + 1);
     for (const std::string& line : lines) {
-        const std::string stripped = trim(line);
+        std::string stripped = trim(line);
+        const bool exclusion = !stripped.empty() && stripped[0] == '!';
+        if (exclusion) {
+            stripped = trim(stripped.substr(1));
+        }
         std::string modelName;
         std::string imageName;
         std::string poseSpec;
         const bool matchesPair =
             !stripped.empty() && stripped[0] != '#' &&
             splitPairLine(stripped, modelName, imageName, poseSpec) &&
-            toLower(modelName) == wantedModel && toLower(imageName) == wantedImage;
+            pairKey(modelName, imageName) == wanted;
         if (!matchesPair) {
             out.push_back(line);
-        } else if (!replaced) {
+        } else if (!exclusion && !replaced) {
             out.push_back(newLine);
             replaced = true;
-        } // further duplicates of the pair are dropped
+        } // duplicates and now-stale exclusions of the pair are dropped
     }
     if (!replaced) {
         out.push_back(newLine);
@@ -395,6 +434,51 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
     fs::create_directories(root / "images", ec);
     fs::create_directories(root / "models", ec);
 
+    // ---- 1. Move library files whose asset was removed from the session
+    // into <root>/removed/ (never deleted outright, so nothing is lost).
+    // Done before the copy-in below so that re-uploading a different file
+    // under the same name replaces the library copy instead of hitting the
+    // name-collision path.
+    std::set<std::string> imageNames;
+    for (const Id id : store_->imageIds()) {
+        if (const ImageAsset* img = store_->image(id)) {
+            imageNames.insert(toLower(img->name));
+        }
+    }
+    std::set<std::string> modelNames;
+    for (const Id id : store_->modelIds()) {
+        if (const ModelAsset* model = store_->model(id)) {
+            modelNames.insert(toLower(model->name));
+        }
+    }
+    const auto moveRemoved = [&](const char* subdir,
+                                 const std::vector<std::string>& extensions,
+                                 const std::set<std::string>& inSession) {
+        for (const fs::path& file : listFiles(root / subdir, extensions)) {
+            const std::string name = file.filename().string();
+            if (inSession.count(toLower(name))) {
+                continue;
+            }
+            std::error_code mec;
+            fs::create_directories(root / "removed", mec);
+            fs::path dst = root / "removed" / name;
+            for (int i = 1; fs::exists(dst, mec); ++i) {
+                dst = root / "removed" / (std::to_string(i) + "_" + name);
+            }
+            fs::rename(file, dst, mec);
+            if (mec) {
+                result.warnings.push_back("could not move removed '" + name +
+                                          "' out of the library: " +
+                                          mec.message());
+            } else {
+                ++result.filesRemoved;
+            }
+        }
+    };
+    moveRemoved("images", {".png", ".jpg", ".jpeg", ".bmp"}, imageNames);
+    moveRemoved("models", {".fbx"}, modelNames);
+
+    // ---- 2. Copy external files into the library.
     // Copies `filePath` (named `name`) into the library subfolder unless a
     // file of that name is already there; returns the library path to use, or
     // empty on failure.
@@ -448,18 +532,98 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
         }
     }
 
+    // ---- 3. Rewrite assignments.cfg to hold exactly the current session:
+    // fresh pair lines for every current assignment, `!` exclusions for
+    // stem-matching pairs that are currently unassigned (so reverting an
+    // auto-paired assignment sticks), stale lines dropped, comments kept.
+    std::map<std::string, std::string> pairLines;       // key -> line
+    std::map<std::string, std::string> exclusionLines;  // key -> line
     for (const Id assignmentId : store_->assignmentIds()) {
-        if (persistAssignment(rootDir, assignmentId)) {
-            ++result.assignmentsSaved;
-        } else {
-            const Assignment* a = store_->assignment(assignmentId);
-            const ModelAsset* model = a ? store_->model(a->modelId) : nullptr;
-            const ImageAsset* image = a ? store_->image(a->imageId) : nullptr;
-            result.warnings.push_back(
-                "assignment '" + (model ? model->name : "?") + " = " +
-                (image ? image->name : "?") +
-                "' could not be saved (its files are not in the library)");
+        const Assignment* a = store_->assignment(assignmentId);
+        const ModelAsset* model = a ? store_->model(a->modelId) : nullptr;
+        const ImageAsset* image = a ? store_->image(a->imageId) : nullptr;
+        if (!model || !image) {
+            continue;
         }
+        if (!isInLibraryFolder(model->filePath, root, "models") ||
+            !isInLibraryFolder(image->filePath, root, "images")) {
+            result.warnings.push_back(
+                "assignment '" + model->name + " = " + image->name +
+                "' could not be saved (its files are not in the library)");
+            continue;
+        }
+        pairLines[pairKey(model->name, image->name)] =
+            formatPairLine(model->name, image->name, a->transform);
+    }
+    for (const Id modelId : store_->modelIds()) {
+        const ModelAsset* model = store_->model(modelId);
+        if (!model || !isInLibraryFolder(model->filePath, root, "models")) {
+            continue;
+        }
+        const std::string stem = toLower(fs::path(model->name).stem().string());
+        for (const Id imageId : store_->imageIds()) {
+            const ImageAsset* img = store_->image(imageId);
+            if (!img || !isInLibraryFolder(img->filePath, root, "images") ||
+                toLower(fs::path(img->name).stem().string()) != stem ||
+                store_->findAssignment(modelId, imageId)) {
+                continue;
+            }
+            exclusionLines[pairKey(model->name, img->name)] =
+                "! " + model->name + " = " + img->name;
+        }
+    }
+    result.assignmentsSaved = static_cast<int>(pairLines.size());
+
+    const fs::path cfgPath = root / "assignments.cfg";
+    std::vector<std::string> lines;
+    {
+        std::ifstream in(cfgPath);
+        std::string line;
+        while (std::getline(in, line)) {
+            lines.push_back(line);
+        }
+    }
+    std::vector<std::string> out;
+    out.reserve(lines.size() + pairLines.size() + exclusionLines.size());
+    for (const std::string& line : lines) {
+        std::string stripped = trim(line);
+        if (stripped.empty() || stripped[0] == '#') {
+            out.push_back(line); // comments and spacing survive the sync
+            continue;
+        }
+        const bool exclusion = stripped[0] == '!';
+        if (exclusion) {
+            stripped = trim(stripped.substr(1));
+        }
+        std::string modelName;
+        std::string imageName;
+        std::string poseSpec;
+        if (!splitPairLine(stripped, modelName, imageName, poseSpec)) {
+            out.push_back(line); // unparseable: keep, load() will warn
+            continue;
+        }
+        const std::string key = pairKey(modelName, imageName);
+        auto& source = exclusion ? exclusionLines : pairLines;
+        if (const auto it = source.find(key); it != source.end()) {
+            out.push_back(it->second); // refresh in place
+            source.erase(it);
+        }
+        // else: stale (pair reverted / asset removed) -> dropped
+    }
+    for (const auto& [key, line] : pairLines) {
+        out.push_back(line); // new assignments without an existing line
+    }
+    for (const auto& [key, line] : exclusionLines) {
+        out.push_back(line);
+    }
+
+    std::ofstream file(cfgPath, std::ios::trunc);
+    if (!file) {
+        result.warnings.push_back("could not write " + cfgPath.string());
+        return result;
+    }
+    for (const std::string& line : out) {
+        file << line << '\n';
     }
     return result;
 }

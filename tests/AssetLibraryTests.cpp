@@ -360,6 +360,83 @@ static void test_save_session_copies_external_files_and_persists() {
     fs::remove_all(ext);
 }
 
+static void test_save_session_drops_reverted_assignments_and_excludes() {
+    TempLibrary lib;
+    lib.addImage("dragon.png");
+    lib.addModel("dragon.fbx");
+
+    // First run: auto-paired by stem; the user reverts the pair and saves.
+    auto store = std::make_shared<DataStore>();
+    AssetLibrary loader(store, stubValidator);
+    loader.load(lib.root.string());
+    const Id model = modelByName(*store, "dragon.fbx");
+    const Id image = imageByName(*store, "dragon.png");
+    CHECK(store->findAssignment(model, image).has_value());
+    store->unassign(model, image);
+    const AssetLibrary::SessionSaveResult saved =
+        loader.saveSession(lib.root.string());
+    CHECK(saved.assignmentsSaved == 0);
+
+    std::ifstream cfg((lib.root / "assignments.cfg").string());
+    std::string contents((std::istreambuf_iterator<char>(cfg)),
+                         std::istreambuf_iterator<char>());
+    CHECK(contents.find("! dragon.fbx = dragon.png") != std::string::npos);
+
+    // Second run: the exclusion keeps the pair unassigned despite the
+    // matching stems.
+    auto store2 = std::make_shared<DataStore>();
+    AssetLibrary loader2(store2, stubValidator);
+    const AssetLibrary::Report report = loader2.load(lib.root.string());
+    CHECK(report.warnings.empty());
+    CHECK(report.assignmentsCreated == 0);
+    CHECK(store2->assignmentIds().empty());
+
+    // Re-assigning and saving again removes the exclusion and restores the
+    // pair line.
+    store2->assign(modelByName(*store2, "dragon.fbx"),
+                   imageByName(*store2, "dragon.png"));
+    loader2.saveSession(lib.root.string());
+    std::ifstream cfg2((lib.root / "assignments.cfg").string());
+    std::string contents2((std::istreambuf_iterator<char>(cfg2)),
+                          std::istreambuf_iterator<char>());
+    CHECK(contents2.find("! dragon.fbx") == std::string::npos);
+    CHECK(contents2.find("dragon.fbx = dragon.png") != std::string::npos);
+}
+
+static void test_save_session_moves_removed_assets_and_drops_stale_lines() {
+    TempLibrary lib;
+    lib.addImage("marker.png");
+    lib.addModel("statue.fbx");
+    lib.writeCfg("# keep this comment\nstatue.fbx = marker.png | s=2\n");
+
+    auto store = std::make_shared<DataStore>();
+    AssetLibrary loader(store, stubValidator);
+    loader.load(lib.root.string());
+    // The user removes the model entirely (cascades the assignment).
+    store->removeModel(modelByName(*store, "statue.fbx"));
+
+    const AssetLibrary::SessionSaveResult saved =
+        loader.saveSession(lib.root.string());
+    CHECK(saved.filesRemoved == 1);
+    CHECK(saved.assignmentsSaved == 0);
+    CHECK(!fs::exists(lib.root / "models" / "statue.fbx"));
+    CHECK(fs::exists(lib.root / "removed" / "statue.fbx"));
+
+    std::ifstream cfg((lib.root / "assignments.cfg").string());
+    std::string contents((std::istreambuf_iterator<char>(cfg)),
+                         std::istreambuf_iterator<char>());
+    CHECK(contents.find("# keep this comment") != std::string::npos);
+    CHECK(contents.find("statue.fbx = marker.png") == std::string::npos);
+
+    // Next start: only the image remains, nothing is assigned.
+    auto store2 = std::make_shared<DataStore>();
+    AssetLibrary loader2(store2, stubValidator);
+    const AssetLibrary::Report report = loader2.load(lib.root.string());
+    CHECK(report.imagesAdded == 1);
+    CHECK(report.modelsAdded == 0);
+    CHECK(store2->assignmentIds().empty());
+}
+
 static void test_missing_root_is_not_an_error() {
     auto store = std::make_shared<DataStore>();
     AssetLibrary loader(store, stubValidator);
@@ -383,5 +460,7 @@ void run_assetlibrary_tests() {
     test_persist_identity_writes_bare_pair();
     test_persist_rejects_non_library_assets();
     test_save_session_copies_external_files_and_persists();
+    test_save_session_drops_reverted_assignments_and_excludes();
+    test_save_session_moves_removed_assets_and_drops_stale_lines();
     test_missing_root_is_not_an_error();
 }

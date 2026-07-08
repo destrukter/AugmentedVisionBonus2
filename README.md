@@ -30,10 +30,15 @@ by one shared in-memory data store (see `src/storage`).
      trackable features get a warning.
    - Assign an FBX model to an image. One model may be assigned to many images.
    - Revert (unassign) and re-assign freely.
-   - **Save session to library**: copies any assets that were uploaded from
-     outside the library into `assets/library/` and writes every assignment
-     with its pose to `assignments.cfg`, so the whole session is restored on
-     the next start.
+   - Remove images/models with the `x` next to each entry (assignments to
+     them are removed along).
+   - **Save session to library**: a full sync — assets uploaded from outside
+     the library are copied into `assets/library/`, every assignment is
+     written with its pose to `assignments.cfg`, stale entries for reverted
+     assignments are dropped (name-matching pairs get a `!` exclusion line so
+     auto-pairing doesn't recreate them), and files of removed assets are
+     moved to `assets/library/removed/`. The next start restores exactly the
+     saved session.
    - For every model assigned to an image, a **Configure** button opens that pairing
      in the Configure window.
 
