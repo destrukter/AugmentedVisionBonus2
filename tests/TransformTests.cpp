@@ -1,5 +1,7 @@
 #include "TestMain.h"
 
+#include <cmath>
+
 #include "storage/Transform.h"
 
 using namespace avb;
@@ -28,9 +30,11 @@ static void test_rotation_90_about_y() {
 
 static void test_scale_applied() {
     Transform t;
-    t.scale = 2.0f;
+    t.scale = Eigen::Vector3f(2.0f, 3.0f, 4.0f); // per-axis
     const Eigen::Matrix4f m = t.toMatrix();
     CHECK(std::abs(m(0, 0) - 2.0f) < 1e-5f);
+    CHECK(std::abs(m(1, 1) - 3.0f) < 1e-5f);
+    CHECK(std::abs(m(2, 2) - 4.0f) < 1e-5f);
 }
 
 void run_transform_tests() {

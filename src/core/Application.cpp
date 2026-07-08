@@ -1,7 +1,9 @@
 #include "core/Application.h"
 
 #include <cstdlib>
+#include <filesystem>
 #include <string>
+#include <vector>
 
 #include "render/ModelLoader.h"
 #include "render/OgreContext.h"
@@ -20,6 +22,47 @@
 #include <nfd.h>
 
 namespace avb {
+
+namespace {
+
+// Resolves the asset-library root without depending on the process working
+// directory (launching from an IDE or the build folder must find the same
+// library as launching from the repo root). Candidates, first existing wins:
+// the AVB_LIBRARY_DIR override, cwd-relative, relative to the executable
+// (which build trees place a few levels below the repo), and the source
+// assets directory recorded at configure time. Returns "" when none exists;
+// `tried` lists every candidate for the not-found diagnostic.
+std::string resolveLibraryDir(std::vector<std::string>& tried) {
+    namespace fs = std::filesystem;
+    std::vector<fs::path> candidates;
+    if (const char* env = std::getenv("AVB_LIBRARY_DIR")) {
+        candidates.emplace_back(env);
+    }
+    candidates.emplace_back("assets/library");
+    if (char* base = SDL_GetBasePath()) {
+        const fs::path exeDir(base);
+        SDL_free(base);
+        candidates.push_back(exeDir / "assets/library");
+        candidates.push_back(exeDir / "../assets/library");
+        candidates.push_back(exeDir / "../../assets/library");
+    }
+#ifdef AVB_SOURCE_ASSETS_DIR
+    candidates.emplace_back(fs::path(AVB_SOURCE_ASSETS_DIR) / "library");
+#endif
+
+    for (const fs::path& candidate : candidates) {
+        std::error_code ec;
+        const fs::path normalized = fs::weakly_canonical(candidate, ec);
+        const fs::path& path = ec ? candidate : normalized;
+        tried.push_back(path.string());
+        if (fs::is_directory(path, ec)) {
+            return path.string();
+        }
+    }
+    return "";
+}
+
+} // namespace
 
 Application::Application() = default;
 Application::~Application() { shutdown(); }
@@ -60,10 +103,20 @@ bool Application::initialize() {
     // AVB_LIBRARY_DIR points to) so recurring images/models, their
     // assignments and their saved poses are available without manual uploads.
     // The summary is shown in the Upload window once it exists (below).
-    const char* libraryEnv = std::getenv("AVB_LIBRARY_DIR");
-    libraryDir_ = libraryEnv ? libraryEnv : "assets/library";
+    std::vector<std::string> triedLibraryDirs;
+    libraryDir_ = resolveLibraryDir(triedLibraryDirs);
     AssetLibrary library(store_, &ModelLoader::validateModelFile);
-    const AssetLibrary::Report libraryReport = library.load(libraryDir_);
+    AssetLibrary::Report libraryReport;
+    if (libraryDir_.empty()) {
+        std::string tried;
+        for (const std::string& dir : triedLibraryDirs) {
+            tried += (tried.empty() ? "" : "; ") + dir;
+        }
+        libraryReport.warnings.push_back(
+            "asset library folder not found - looked in: " + tried);
+    } else {
+        libraryReport = library.load(libraryDir_);
+    }
     for (const std::string& warning : libraryReport.warnings) {
         SDL_Log("Asset library: %s", warning.c_str());
     }
@@ -118,8 +171,14 @@ bool Application::initialize() {
     }
 
     // Surface the asset-library result where uploads are managed.
-    if (libraryReport.imagesAdded + libraryReport.modelsAdded > 0 ||
-        !libraryReport.warnings.empty()) {
+    if (libraryDir_.empty()) {
+        uploadWindow_->setStatus(
+            UploadWindow::StatusKind::Warning,
+            "Asset library folder not found (see the log for the paths "
+            "searched). Create assets/library/{images,models} or set "
+            "AVB_LIBRARY_DIR.");
+    } else if (libraryReport.imagesAdded + libraryReport.modelsAdded > 0 ||
+               !libraryReport.warnings.empty()) {
         const std::string summary =
             "Library: " + std::to_string(libraryReport.imagesAdded) +
             " image(s), " + std::to_string(libraryReport.modelsAdded) +

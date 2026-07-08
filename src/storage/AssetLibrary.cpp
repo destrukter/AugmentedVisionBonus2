@@ -135,7 +135,7 @@ Transform parsePose(const std::string& spec, int lineNo,
                                ", using the default");
         };
         if (token.size() < 3 || token[1] != '=') {
-            warn("is not of the form t=x,y,z / r=x,y,z / s=v");
+            warn("is not of the form t=x,y,z / r=x,y,z / s=x,y,z (or s=v)");
             continue;
         }
         const char key = static_cast<char>(std::tolower(token[0]));
@@ -145,11 +145,19 @@ Transform parsePose(const std::string& spec, int lineNo,
             t.translation = Eigen::Vector3f(nums[0], nums[1], nums[2]);
         } else if (key == 'r' && parseFloats(values, nums, 3)) {
             t.rotationEulerDeg = Eigen::Vector3f(nums[0], nums[1], nums[2]);
-        } else if (key == 's' && parseFloats(values, nums, 1)) {
-            if (nums[0] > 0.0f) {
-                t.scale = nums[0];
-            } else {
+        } else if (key == 's') {
+            // Either three per-axis values or one uniform value.
+            bool ok = parseFloats(values, nums, 3);
+            if (!ok && parseFloats(values, nums, 1)) {
+                nums[1] = nums[2] = nums[0];
+                ok = true;
+            }
+            if (!ok) {
+                warn("could not be parsed");
+            } else if (nums[0] <= 0.0f || nums[1] <= 0.0f || nums[2] <= 0.0f) {
                 warn("has a non-positive scale");
+            } else {
+                t.scale = Eigen::Vector3f(nums[0], nums[1], nums[2]);
             }
         } else {
             warn("could not be parsed");
@@ -165,17 +173,22 @@ std::string formatFloat(float v) {
 }
 
 /// Formats the pose columns written after `|`; empty for the identity pose
-/// (a bare pair line already means "identity").
+/// (a bare pair line already means "identity"). A uniform scale is written as
+/// a single value, per-axis scales as x,y,z.
 std::string formatPose(const Transform& t) {
     if (t.isIdentity()) {
         return "";
+    }
+    std::string scale = formatFloat(t.scale.x());
+    if (t.scale.x() != t.scale.y() || t.scale.y() != t.scale.z()) {
+        scale += "," + formatFloat(t.scale.y()) + "," + formatFloat(t.scale.z());
     }
     return "t=" + formatFloat(t.translation.x()) + "," +
            formatFloat(t.translation.y()) + "," +
            formatFloat(t.translation.z()) + " r=" +
            formatFloat(t.rotationEulerDeg.x()) + "," +
            formatFloat(t.rotationEulerDeg.y()) + "," +
-           formatFloat(t.rotationEulerDeg.z()) + " s=" + formatFloat(t.scale);
+           formatFloat(t.rotationEulerDeg.z()) + " s=" + scale;
 }
 
 /// True when `filePath` is a direct child of `<root>/<subdir>` - i.e. the

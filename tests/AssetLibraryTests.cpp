@@ -173,7 +173,25 @@ static void test_cfg_pose_columns_are_applied() {
     CHECK(t.has_value());
     CHECK(t->translation.isApprox(Eigen::Vector3f(0.5f, -1.0f, 0.25f)));
     CHECK(t->rotationEulerDeg.isApprox(Eigen::Vector3f(0.0f, 90.0f, 45.0f)));
-    CHECK(std::abs(t->scale - 2.0f) < 1e-6f);
+    // A single s value scales all axes uniformly.
+    CHECK(t->scale.isApprox(Eigen::Vector3f(2.0f, 2.0f, 2.0f)));
+}
+
+static void test_cfg_per_axis_scale() {
+    TempLibrary lib;
+    lib.addImage("marker.png");
+    lib.addModel("statue.fbx");
+    lib.writeCfg("statue.fbx = marker.png | s=1,2,3\n");
+
+    auto store = std::make_shared<DataStore>();
+    AssetLibrary loader(store, stubValidator);
+    const AssetLibrary::Report report = loader.load(lib.root.string());
+    CHECK(report.warnings.empty());
+
+    const auto aid = store->findAssignment(modelByName(*store, "statue.fbx"),
+                                           imageByName(*store, "marker.png"));
+    const auto t = store->transform(*aid);
+    CHECK(t->scale.isApprox(Eigen::Vector3f(1.0f, 2.0f, 3.0f)));
 }
 
 static void test_cfg_pose_partial_and_missing_defaults() {
@@ -192,7 +210,7 @@ static void test_cfg_pose_partial_and_missing_defaults() {
     const auto t = store->transform(*aid);
     CHECK(t->translation.isZero());
     CHECK(t->rotationEulerDeg.isZero());
-    CHECK(std::abs(t->scale - 3.0f) < 1e-6f);
+    CHECK(t->scale.isApprox(Eigen::Vector3f(3.0f, 3.0f, 3.0f)));
 }
 
 static void test_cfg_pose_malformed_tokens_warn_and_default() {
@@ -210,7 +228,7 @@ static void test_cfg_pose_malformed_tokens_warn_and_default() {
                                            imageByName(*store, "marker.png"));
     const auto t = store->transform(*aid);
     CHECK(t->translation.isZero());  // malformed -> default
-    CHECK(std::abs(t->scale - 1.0f) < 1e-6f);
+    CHECK(t->scale.isOnes());
     CHECK(t->rotationEulerDeg.isApprox(Eigen::Vector3f(0.0f, 10.0f, 0.0f)));
 }
 
@@ -230,7 +248,7 @@ static void test_persisted_pose_survives_reload() {
     Transform pose;
     pose.translation = Eigen::Vector3f(0.1f, 0.2f, 0.3f);
     pose.rotationEulerDeg = Eigen::Vector3f(10.0f, 20.0f, 30.0f);
-    pose.scale = 1.5f;
+    pose.scale = Eigen::Vector3f(1.5f, 2.5f, 0.75f); // per-axis round trip
     store->setTransform(*aid, pose);
     CHECK(loader.persistAssignment(lib.root.string(), *aid));
 
@@ -253,7 +271,7 @@ static void test_persisted_pose_survives_reload() {
     const auto restored = store2->transform(*aid2);
     CHECK(restored->translation.isApprox(pose.translation, 1e-4f));
     CHECK(restored->rotationEulerDeg.isApprox(pose.rotationEulerDeg, 1e-4f));
-    CHECK(std::abs(restored->scale - pose.scale) < 1e-4f);
+    CHECK(restored->scale.isApprox(pose.scale, 1e-4f));
 }
 
 static void test_persist_identity_writes_bare_pair() {
@@ -302,6 +320,7 @@ void run_assetlibrary_tests() {
     test_auto_pairs_by_stem();
     test_cfg_and_stem_pair_do_not_duplicate();
     test_cfg_pose_columns_are_applied();
+    test_cfg_per_axis_scale();
     test_cfg_pose_partial_and_missing_defaults();
     test_cfg_pose_malformed_tokens_warn_and_default();
     test_persisted_pose_survives_reload();

@@ -40,7 +40,7 @@ flows between the three windows and the backend.
 The single source of truth, shared by all windows as a `std::shared_ptr`.
 
 - `Types.h` — `Id` (uint64) handle type, `kInvalidId`.
-- `Transform` — translation (Vec3) + rotation (Euler degrees) + scale; converts
+- `Transform` — translation (Vec3) + rotation (Euler degrees) + per-axis scale; converts
   to a 4x4 Eigen matrix. **Translation and rotation default to zero** per spec.
 - `Assets.h` — `ImageAsset`, `ModelAsset`, `Assignment`.
 - `DataStore` — CRUD for images/models and the assignment graph:
@@ -58,7 +58,7 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
   validated like manual uploads, and assignments are resolved by file name -
   explicit `model.fbx = image.png` pairs from `assignments.cfg` plus automatic
   pairing of files sharing a base name (`dragon.fbx` + `dragon.png`). Pair
-  lines carry optional pose columns (`| t=x,y,z r=x,y,z s=v`, each part
+  lines carry optional pose columns (`| t=x,y,z r=x,y,z s=v` or `s=x,y,z`, each part
   defaulting to identity when omitted); `persistAssignment()` writes a saved
   pose back into the cfg surgically (other lines and comments are preserved),
   which the Configure window's Save triggers for library assets - poses

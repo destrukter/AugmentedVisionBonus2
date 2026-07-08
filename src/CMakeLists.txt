@@ -57,6 +57,12 @@ if(OGRE_MEDIA_DIR)
         AVB_OGRE_MEDIA_DIR="${OGRE_MEDIA_DIR}")
 endif()
 
+# Record the source assets directory so the app can find the default asset
+# library regardless of the working directory it is launched from (IDE, build
+# folder, ...). Used as the last candidate after cwd/executable-relative paths.
+target_compile_definitions(AugmentedVisionBonus2 PRIVATE
+    AVB_SOURCE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
+
 target_link_libraries(AugmentedVisionBonus2 PRIVATE
     avb_storage
     avb_vision

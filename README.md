@@ -37,6 +37,7 @@ by one shared in-memory data store (see `src/storage`).
    - Edit the pose of an FBX model **relative to its image** interactively:
      a 3D viewport shows the image plane and a translate / rotate / scale
      gizmo (drag the handles; right-drag orbits the view, wheel zooms).
+     Scale is per-axis (with a uniform handle at the gizmo center).
    - Numeric fields underneath give exact control over the same values.
    - **Save** writes the pose back into the data store.
 
@@ -74,7 +75,10 @@ omitted and defaults to the identity pose (translation 0, rotation 0, scale 1):
 
 ```
 model-file.fbx = image-file.png | t=0,0.5,0 r=0,90,0 s=2
+model-file.fbx = image-file.png | s=1,2,0.5
 ```
+
+`s` takes one uniform value or per-axis `x,y,z`.
 
 Poses saved in the Configure window are written back into these columns
 automatically (for library assets), so configured poses **survive restarts**.
@@ -116,7 +120,7 @@ See `src/storage`. The store keeps:
 ```bash
 cmake -S . -B build
 cmake --build build -j
-./build/AugmentedVisionBonus2
+./build/src/AugmentedVisionBonus2
 ```
 
 Dependencies (OpenCV, OGRE, Eigen3, Assimp, SDL2) are resolved with `find_package`.
@@ -128,5 +132,5 @@ The RTSS (auto-shader) pipeline needs OGRE's `RTShaderLib` media (e.g.
 if it lives somewhere unusual, point the app at it at runtime:
 
 ```bash
-OGRE_MEDIA_DIR=/path/to/OGRE/Media ./build/AugmentedVisionBonus2
+OGRE_MEDIA_DIR=/path/to/OGRE/Media ./build/src/AugmentedVisionBonus2
 ```

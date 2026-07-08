@@ -51,7 +51,7 @@ Eigen::Matrix4f lookAt(const Eigen::Vector3f& eye, const Eigen::Vector3f& center
 }
 
 /// Extracts translation / rotation (Euler degrees, matching
-/// Transform::rotationMatrix's Rz*Ry*Rx convention) / uniform scale from a
+/// Transform::rotationMatrix's Rz*Ry*Rx convention) / per-axis scale from a
 /// manipulated 4x4 matrix back into a Transform.
 Transform decomposeToTransform(const Eigen::Matrix4f& m) {
     Transform t;
@@ -61,7 +61,8 @@ Transform decomposeToTransform(const Eigen::Matrix4f& m) {
     const float sx = rs.col(0).norm();
     const float sy = rs.col(1).norm();
     const float sz = rs.col(2).norm();
-    t.scale = std::max((sx + sy + sz) / 3.0f, 1e-4f); // uniform scale by design
+    t.scale = Eigen::Vector3f(std::max(sx, 1e-4f), std::max(sy, 1e-4f),
+                              std::max(sz, 1e-4f));
     if (sx > 1e-6f) rs.col(0) /= sx;
     if (sy > 1e-6f) rs.col(1) /= sy;
     if (sz > 1e-6f) rs.col(2) /= sz;
@@ -184,7 +185,8 @@ void ConfigureWindow::drawUi() {
                                  working_.translation.data(), 0.01f);
     changed |= ImGui::DragFloat3("Rotation (deg)",
                                  working_.rotationEulerDeg.data(), 0.5f);
-    changed |= ImGui::DragFloat("Scale", &working_.scale, 0.01f, 0.001f, 1000.0f);
+    changed |= ImGui::DragFloat3("Scale (x,y,z)", working_.scale.data(), 0.01f,
+                                 0.001f, 1000.0f);
     dirty_ = dirty_ || changed;
 
     ImGui::TextDisabled("Model matrix preview");
