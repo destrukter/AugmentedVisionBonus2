@@ -34,6 +34,14 @@ public:
     /// manager and the RTSS shader generator. Returns false on failure.
     bool initialize();
 
+    /// Re-binds OGRE's own GL context on this thread. Must be called before
+    /// driving any OGRE rendering or GPU-resource creation when foreign GL
+    /// contexts (the SDL/ImGui windows) may have been made current since the
+    /// last OGRE call: OGRE only tracks context switches it performed itself,
+    /// so it never notices - and never undoes - an outside switch, and all of
+    /// its GL calls silently land in whichever context happens to be bound.
+    void makeRenderContextCurrent();
+
     Ogre::Root* root() const { return root_.get(); }
     Ogre::SceneManager* sceneManager() const { return sceneManager_; }
     Ogre::RTShader::ShaderGenerator* shaderGenerator() const { return shaderGen_; }

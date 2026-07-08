@@ -2,6 +2,7 @@
 # headless in CI.
 add_executable(avb_storage_tests
     TestRunner.cpp
+    AssetLibraryTests.cpp
     DataStoreTests.cpp
     TransformTests.cpp
 )

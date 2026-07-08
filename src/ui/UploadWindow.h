@@ -25,6 +25,11 @@ public:
 
     UploadWindow(std::shared_ptr<DataStore> store, ConfigureCallback onConfigure);
 
+    /// Sets the status line shown under the upload buttons. Also used by the
+    /// Application to surface the startup asset-library summary.
+    enum class StatusKind { Success, Warning, Error };
+    void setStatus(StatusKind kind, std::string message);
+
 protected:
     void drawUi() override;
 
@@ -34,10 +39,6 @@ private:
 
     void uploadImage(const std::string& path);
     void uploadModel(const std::string& path);
-
-    /// Sets the status line shown under the upload buttons.
-    enum class StatusKind { Success, Warning, Error };
-    void setStatus(StatusKind kind, std::string message);
 
     std::shared_ptr<DataStore> store_;
     ConfigureCallback onConfigure_;

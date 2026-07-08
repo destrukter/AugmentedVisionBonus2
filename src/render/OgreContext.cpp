@@ -19,6 +19,18 @@
 
 #include <RTShaderSystem/OgreShaderGenerator.h>
 
+// GLContext (shared by the GL and GL3Plus render systems - the two installed
+// headers are the same GLSupport class) exposes setCurrent(), the only public
+// way to force OGRE's context back onto the thread; see
+// makeRenderContextCurrent().
+#if __has_include(<RenderSystems/GL3Plus/OgreGLContext.h>)
+#include <RenderSystems/GL3Plus/OgreGLContext.h>
+#define AVB_HAVE_OGRE_GLCONTEXT 1
+#elif __has_include(<RenderSystems/GL/OgreGLContext.h>)
+#include <RenderSystems/GL/OgreGLContext.h>
+#define AVB_HAVE_OGRE_GLCONTEXT 1
+#endif
+
 namespace avb {
 
 namespace {
@@ -272,6 +284,22 @@ bool OgreContext::initShaderSystem() {
     materialResolver_ = std::make_unique<MaterialResolver>(shaderGen_);
     Ogre::MaterialManager::getSingleton().addListener(materialResolver_.get());
     return true;
+}
+
+void OgreContext::makeRenderContextCurrent() {
+#ifdef AVB_HAVE_OGRE_GLCONTEXT
+    if (!hiddenWindow_) {
+        return;
+    }
+    Ogre::GLContext* context = nullptr;
+    // The symbolic constant (GLRenderTexture::CustomAttributeString_GLCONTEXT)
+    // lives in the dynamically loaded render-system plugin, so use its literal
+    // value rather than linking against the plugin.
+    hiddenWindow_->getCustomAttribute("GLCONTEXT", &context);
+    if (context) {
+        context->setCurrent();
+    }
+#endif
 }
 
 bool OgreContext::initialize() {

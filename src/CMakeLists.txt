@@ -1,8 +1,9 @@
 # Backend storage is a standalone library so it can be unit-tested without any
 # UI / rendering / vision dependency.
 add_library(avb_storage
-    storage/Transform.cpp
+    storage/AssetLibrary.cpp
     storage/DataStore.cpp
+    storage/Transform.cpp
 )
 target_include_directories(avb_storage PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(avb_storage

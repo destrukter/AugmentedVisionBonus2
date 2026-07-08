@@ -51,6 +51,16 @@ public:
     void drawModel(Id modelId, const Eigen::Matrix4f& pose);
     void endFrame();
 
+    /// Computes a camera-space framing pose for previewing `modelId` with
+    /// `configured` (the assignment transform) applied: the model is centered,
+    /// tilted (plus `yawDeg` for a turntable spin) and pushed back far enough
+    /// that its whole bounding sphere fits the view - a fixed distance would
+    /// put the camera inside large models or show flat ones edge-on as a bare
+    /// sliver. Pass the result to drawModel as `pose * configured`. Returns
+    /// false when the model cannot be loaded.
+    bool previewFramingPose(Id modelId, const Eigen::Matrix4f& configured,
+                            float yawDeg, Eigen::Matrix4f& outPose);
+
     /// Composited RGBA image (camera frame + rendered models). Empty until the
     /// first endFrame(). CV_8UC4.
     const cv::Mat& compositedImage() const { return composited_; }

@@ -50,6 +50,29 @@ by one shared in-memory data store (see `src/storage`).
      (OGRE3D) at their configured pose. The feed is displayed letterboxed —
      resizing the window never warps the image or affects tracking.
 
+## Default asset library (auto-upload at startup)
+
+Files placed under `assets/library/` are uploaded automatically when the app
+starts, with the same validation as manual uploads:
+
+```
+assets/library/
+├── images/           # tracked images (*.png *.jpg *.jpeg *.bmp)
+├── models/           # FBX models (*.fbx)
+└── assignments.cfg   # optional model -> image pairs
+```
+
+Assignments between them are resolved **by file name**, two ways:
+
+1. Explicit pairs in `assignments.cfg`, one per line (case-insensitive):
+   `model-file.fbx = image-file.png`
+2. Automatically by base name: `dragon.fbx` + `dragon.png` are paired without
+   any config entry.
+
+The load summary (and any validation warnings) appears in the Upload window
+and the log. Point the app at a different folder with the `AVB_LIBRARY_DIR`
+environment variable.
+
 ## Backend storage model
 
 See `src/storage`. The store keeps:

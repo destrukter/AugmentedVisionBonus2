@@ -1,8 +1,12 @@
 #include "core/Application.h"
 
+#include <cstdlib>
+#include <string>
+
 #include "render/ModelLoader.h"
 #include "render/OgreContext.h"
 #include "render/SceneRenderer.h"
+#include "storage/AssetLibrary.h"
 #include "storage/DataStore.h"
 #include "ui/CameraWindow.h"
 #include "ui/ConfigureWindow.h"
@@ -52,6 +56,21 @@ bool Application::initialize() {
     // Backend store shared by every window.
     store_ = std::make_shared<DataStore>();
 
+    // Auto-upload the default asset library (assets/library, or the folder
+    // AVB_LIBRARY_DIR points to) so recurring images/models and their
+    // assignments are available without manual uploads. The summary is shown
+    // in the Upload window once it exists (below).
+    const char* libraryEnv = std::getenv("AVB_LIBRARY_DIR");
+    const std::string libraryDir = libraryEnv ? libraryEnv : "assets/library";
+    AssetLibrary library(store_, &ModelLoader::validateModelFile);
+    const AssetLibrary::Report libraryReport = library.load(libraryDir);
+    for (const std::string& warning : libraryReport.warnings) {
+        SDL_Log("Asset library: %s", warning.c_str());
+    }
+    SDL_Log("Asset library '%s': %d image(s), %d model(s), %d assignment(s)",
+            libraryDir.c_str(), libraryReport.imagesAdded,
+            libraryReport.modelsAdded, libraryReport.assignmentsCreated);
+
     // Rendering + vision pipeline.
     ogre_ = std::make_shared<OgreContext>();
     if (!ogre_->initialize()) {
@@ -85,6 +104,24 @@ bool Application::initialize() {
     if (!uploadWindow_->initialize() || !configureWindow_->initialize() ||
         !cameraWindow_->initialize()) {
         return false;
+    }
+
+    // Surface the asset-library result where uploads are managed.
+    if (libraryReport.imagesAdded + libraryReport.modelsAdded > 0 ||
+        !libraryReport.warnings.empty()) {
+        const std::string summary =
+            "Library: " + std::to_string(libraryReport.imagesAdded) +
+            " image(s), " + std::to_string(libraryReport.modelsAdded) +
+            " model(s), " + std::to_string(libraryReport.assignmentsCreated) +
+            " assignment(s) loaded from '" + libraryDir + "'" +
+            (libraryReport.warnings.empty()
+                 ? ""
+                 : " - " + std::to_string(libraryReport.warnings.size()) +
+                       " warning(s), see log");
+        uploadWindow_->setStatus(libraryReport.warnings.empty()
+                                     ? UploadWindow::StatusKind::Success
+                                     : UploadWindow::StatusKind::Warning,
+                                 summary);
     }
 
     running_ = true;

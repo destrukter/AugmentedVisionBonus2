@@ -1,6 +1,8 @@
 #include "ui/CameraWindow.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <utility>
@@ -23,12 +25,14 @@ namespace avb {
 
 namespace {
 
-// A fixed pose placing a model a little in front of the camera (looking down
-// -Z), used for the preview fallback when nothing is tracked yet.
-Eigen::Matrix4f previewPose() {
-    Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
-    m(2, 3) = -3.0f; // 3 units in front of the camera
-    return m;
+// Turntable angle for the untracked-model preview: a slow spin makes it
+// obvious the preview is live 3D rather than a static image.
+float previewYawDeg() {
+    using clock = std::chrono::steady_clock;
+    static const clock::time_point start = clock::now();
+    const double seconds =
+        std::chrono::duration<double>(clock::now() - start).count();
+    return static_cast<float>(std::fmod(seconds * 20.0, 360.0));
 }
 
 // Draws the detected target's quad (and a confidence label) onto a BGR frame.
@@ -193,14 +197,21 @@ void CameraWindow::updateTrackingAndRender() {
         }
     }
 
-    // Fallback so the 3D pipeline is visible without a tracked image.
+    // Fallback so the 3D pipeline is visible without a tracked image. The
+    // framing pose fits the whole model in view regardless of its native size
+    // or shape (a fixed distance showed huge models from inside and flat ones
+    // edge-on as a bare sliver).
     if (rendered == 0 && previewWhenUntracked_) {
         const std::vector<Id> assignments = store_->assignmentIds();
         if (!assignments.empty()) {
             const Assignment* a = store_->assignment(assignments.front());
             if (a) {
-                renderer_->drawModel(a->modelId,
-                                     previewPose() * a->transform.toMatrix());
+                const Eigen::Matrix4f configured = a->transform.toMatrix();
+                Eigen::Matrix4f framing;
+                if (renderer_->previewFramingPose(a->modelId, configured,
+                                                  previewYawDeg(), framing)) {
+                    renderer_->drawModel(a->modelId, framing * configured);
+                }
             }
         }
     }

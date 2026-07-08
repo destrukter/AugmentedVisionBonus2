@@ -53,6 +53,14 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
     the Camera window uses it to know exactly when to rebuild tracker targets
     (comparing counts would miss a remove+add between two frames).
 
+- `AssetLibrary` — loads the default asset folder (`assets/library`, or
+  `AVB_LIBRARY_DIR`) into the store at startup: images and FBX models are
+  validated like manual uploads, and assignments are resolved by file name -
+  explicit `model.fbx = image.png` pairs from `assignments.cfg` plus automatic
+  pairing of files sharing a base name (`dragon.fbx` + `dragon.png`). The FBX
+  check is injected as a callback so the storage layer stays free of render
+  dependencies (the app passes `ModelLoader::validateModelFile`).
+
 This layer is fully unit-tested in `tests/` and builds as the `avb_storage`
 library with no UI dependencies, so CI can run it headless.
 
@@ -122,6 +130,17 @@ library with no UI dependencies, so CI can run it headless.
 - `SceneRenderer` — renders the assigned models (over a transparent background)
   into an off-screen render texture, reads the RGBA result back to the CPU, and
   composites it over the camera frame. Notes:
+  - every frame starts by re-binding OGRE's own GL context
+    (`OgreContext::makeRenderContextCurrent`): the ImGui windows make their
+    SDL contexts current in between, and OGRE only tracks context switches it
+    performed itself - without the re-bind its rendering silently lands in
+    whichever context happens to be bound;
+  - the untracked-model preview uses `previewFramingPose`, which fits the
+    model's (transformed) bounding sphere into the view with a slight tilt and
+    turntable spin - a fixed pose showed huge models from inside and flat ones
+    edge-on;
+  - the CPU readback requests `PF_BYTE_RGBA` (byte-order R,G,B,A); the
+    int-packed `PF_R8G8B8A8` layout put the alpha byte in the red channel;
   - the render target is **resized to the camera's native frame size** on the
     first delivered frame, keeping the OGRE projection aligned with the
     tracker's intrinsics and avoiding any per-frame feed resize;

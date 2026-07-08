@@ -1,7 +1,10 @@
 #include "render/SceneRenderer.h"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
+#include <Eigen/Geometry>
 #include <opencv2/imgproc.hpp>
 
 #include <OgreCamera.h>
@@ -115,6 +118,12 @@ void SceneRenderer::destroyRenderTarget() {
 }
 
 void SceneRenderer::beginFrame(const cv::Mat& cameraFrame) {
+    // The ImGui windows made their own GL contexts current since the last
+    // frame; re-bind OGRE's before any mesh upload / render / readback this
+    // frame, or those calls land in whichever context is bound and the RTT
+    // reads back stale garbage. (Previously this happened as a side effect of
+    // the since-removed debug window's update bouncing OGRE's context.)
+    context_->makeRenderContextCurrent();
     cameraFrame_ = cameraFrame; // shallow ref; copied during compositing
     // Track at the camera's native resolution: sizing the render target to the
     // frame keeps the OGRE projection aligned with the tracker's intrinsics
@@ -176,6 +185,72 @@ void SceneRenderer::drawModel(Id modelId, const Eigen::Matrix4f& pose) {
     ++visibleModels_;
 }
 
+bool SceneRenderer::previewFramingPose(Id modelId,
+                                       const Eigen::Matrix4f& configured,
+                                       float yawDeg, Eigen::Matrix4f& outPose) {
+    Ogre::SceneNode* node = ensureNode(modelId);
+    if (!node || node->numAttachedObjects() == 0) {
+        return false;
+    }
+    const Ogre::AxisAlignedBox& box = node->getAttachedObject(0)->getBoundingBox();
+    if (box.isNull() || box.isInfinite()) {
+        return false;
+    }
+
+    // Bounding sphere of the model with the configured transform applied
+    // (scale in `configured` must influence the framing distance).
+    const Ogre::Vector3 mn = box.getMinimum();
+    const Ogre::Vector3 mx = box.getMaximum();
+    Eigen::Vector3f corners[8];
+    int n = 0;
+    for (int ix = 0; ix < 2; ++ix) {
+        for (int iy = 0; iy < 2; ++iy) {
+            for (int iz = 0; iz < 2; ++iz) {
+                const Eigen::Vector4f c(ix ? mx.x : mn.x, iy ? mx.y : mn.y,
+                                        iz ? mx.z : mn.z, 1.0f);
+                corners[n++] = (configured * c).head<3>();
+            }
+        }
+    }
+    Eigen::Vector3f lo = corners[0];
+    Eigen::Vector3f hi = corners[0];
+    for (int i = 1; i < 8; ++i) {
+        lo = lo.cwiseMin(corners[i]);
+        hi = hi.cwiseMax(corners[i]);
+    }
+    const Eigen::Vector3f center = 0.5f * (lo + hi);
+    float radius = 1e-3f;
+    for (const Eigen::Vector3f& c : corners) {
+        radius = std::max(radius, (c - center).norm());
+    }
+
+    // Distance at which the bounding sphere fits the tighter half-FOV
+    // (sin(halfFov) = radius / distance), with some margin.
+    constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+    const float fovY = ImageTracker::kDefaultFovYDeg * kDegToRad;
+    const float aspect =
+        height_ > 0 ? static_cast<float>(width_) / static_cast<float>(height_)
+                    : 1.0f;
+    const float fovX = 2.0f * std::atan(std::tan(fovY * 0.5f) * aspect);
+    const float halfFov = 0.5f * std::min(fovX, fovY);
+    const float distance =
+        std::max(1.15f * radius / std::sin(halfFov), 0.1f + 1.2f * radius);
+
+    // Slight fixed tilt plus the caller-provided turntable yaw, rotating about
+    // the model's (transformed) bound center so it stays centered in view.
+    const Eigen::Matrix3f rot =
+        (Eigen::AngleAxisf(-20.0f * kDegToRad, Eigen::Vector3f::UnitX()) *
+         Eigen::AngleAxisf(yawDeg * kDegToRad, Eigen::Vector3f::UnitY()))
+            .toRotationMatrix();
+
+    // outPose * x = rot * (x - center) + (0, 0, -distance)
+    outPose = Eigen::Matrix4f::Identity();
+    outPose.block<3, 3>(0, 0) = rot;
+    outPose.block<3, 1>(0, 3) =
+        Eigen::Vector3f(0.0f, 0.0f, -distance) - rot * center;
+    return true;
+}
+
 void SceneRenderer::endFrame() {
     if (!initialized_) {
         return;
@@ -199,9 +274,14 @@ void SceneRenderer::endFrame() {
 
     renderTarget_->update();
 
-    // Read the rendered RGBA overlay back to the CPU.
+    // Read the rendered overlay back to the CPU. PF_BYTE_RGBA requests
+    // byte-order R,G,B,A - which is what the cv::Mat view below assumes.
+    // (PF_R8G8B8A8 is an int-packed format whose little-endian memory layout
+    // is A,B,G,R; using it here put the FBO's alpha byte into the red channel,
+    // tinting models red on drivers that return alpha=255 and cyan-blue on
+    // drivers that return alpha=0.)
     Ogre::PixelBox pb(static_cast<unsigned int>(width_),
-                      static_cast<unsigned int>(height_), 1, Ogre::PF_R8G8B8A8,
+                      static_cast<unsigned int>(height_), 1, Ogre::PF_BYTE_RGBA,
                       readback_.data());
     renderTarget_->copyContentsToMemory(
         Ogre::Box(0, 0, static_cast<unsigned int>(width_),

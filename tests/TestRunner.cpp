@@ -1,11 +1,13 @@
 #include "TestMain.h"
 
+void run_assetlibrary_tests();
 void run_datastore_tests();
 void run_transform_tests();
 
 int main() {
     run_transform_tests();
     run_datastore_tests();
+    run_assetlibrary_tests();
 
     const int failures = avbtest::failures();
     if (failures == 0) {
