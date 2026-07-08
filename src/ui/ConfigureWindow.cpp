@@ -123,8 +123,11 @@ void drawModelProxy(ImDrawList* drawList, const Eigen::Matrix4f& viewProj,
 
 } // namespace
 
-ConfigureWindow::ConfigureWindow(std::shared_ptr<DataStore> store)
-    : Window("Configure", 560, 680), store_(std::move(store)) {}
+ConfigureWindow::ConfigureWindow(std::shared_ptr<DataStore> store,
+                                 SaveCallback onSaved)
+    : Window("Configure", 560, 680),
+      store_(std::move(store)),
+      onSaved_(std::move(onSaved)) {}
 
 void ConfigureWindow::openAssignment(Id assignmentId) {
     activeAssignment_ = assignmentId;
@@ -331,6 +334,9 @@ void ConfigureWindow::save() {
     if (activeAssignment_ != kInvalidId &&
         store_->setTransform(activeAssignment_, working_)) {
         dirty_ = false;
+        if (onSaved_) {
+            onSaved_(activeAssignment_);
+        }
     }
 }
 

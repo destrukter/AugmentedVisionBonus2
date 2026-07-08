@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "storage/Types.h"
+
 namespace avb {
 
 class DataStore;
@@ -26,6 +28,16 @@ class DataStore;
 ///     against the files found in the two folders.)
 ///  2. Automatically: a model and an image sharing the same base name (stem)
 ///     are paired, e.g. `dragon.fbx` + `dragon.png`.
+///
+/// A pair line may carry optional pose columns after a `|`:
+///
+///     model-file.fbx = image-file.png | t=x,y,z r=x,y,z s=v
+///
+/// `t` is the translation, `r` the rotation in Euler degrees, `s` the uniform
+/// scale. Each may be omitted (in any order); missing components default to
+/// the identity pose (translation 0, rotation 0, scale 1). Poses configured
+/// in the app are written back into these columns via persistAssignment(), so
+/// they survive restarts.
 ///
 /// Every file is validated the same way a manual upload is (images must
 /// decode; models must pass the injected validator); failures are reported as
@@ -50,6 +62,18 @@ public:
     /// Scans `rootDir` and populates the store. A missing root (or missing
     /// subfolders) is not an error - the report just stays empty.
     Report load(const std::string& rootDir);
+
+    /// Writes the current pose of `assignmentId` back into
+    /// `<rootDir>/assignments.cfg` so it survives restarts. The edit is
+    /// surgical: the matching pair line is rewritten (or appended when the
+    /// pair - e.g. one auto-created by stem matching - has no line yet) and
+    /// every other line, including comments, is preserved. Identity poses
+    /// write a bare pair with no pose columns.
+    ///
+    /// Returns false when the assignment is unknown or when its model/image
+    /// files do not live in the library folders - such names could not be
+    /// resolved at the next startup, so persisting them would be misleading.
+    bool persistAssignment(const std::string& rootDir, Id assignmentId);
 
 private:
     std::shared_ptr<DataStore> store_;

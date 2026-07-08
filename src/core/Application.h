@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace avb {
@@ -43,6 +44,7 @@ private:
 
     // Backend (shared).
     std::shared_ptr<DataStore> store_;
+    std::string libraryDir_;  ///< Asset-library root (poses persist here).
 
     // Rendering / vision (shared with the Camera window).
     std::shared_ptr<OgreContext> ogre_;

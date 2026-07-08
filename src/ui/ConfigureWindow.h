@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 
 #include <Eigen/Core>
@@ -21,7 +22,12 @@ class DataStore;
 /// clicks "Save", which writes them back into the DataStore.
 class ConfigureWindow : public Window {
 public:
-    explicit ConfigureWindow(std::shared_ptr<DataStore> store);
+    /// Invoked after a pose was successfully saved to the store (used by the
+    /// Application to persist library poses into assignments.cfg).
+    using SaveCallback = std::function<void(Id assignmentId)>;
+
+    explicit ConfigureWindow(std::shared_ptr<DataStore> store,
+                             SaveCallback onSaved = {});
 
     /// Loads an assignment for editing (called when "Configure" is clicked in
     /// the Upload window). Pulls the stored Transform into the working copy.
@@ -40,6 +46,7 @@ private:
     float imagePlaneAspect() const;
 
     std::shared_ptr<DataStore> store_;
+    SaveCallback onSaved_;
     Id activeAssignment_{kInvalidId};
     Transform working_{};   ///< Editable copy; defaults to identity.
     bool dirty_{false};     ///< True when working_ differs from the stored pose.

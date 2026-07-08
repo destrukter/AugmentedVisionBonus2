@@ -57,9 +57,14 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
   `AVB_LIBRARY_DIR`) into the store at startup: images and FBX models are
   validated like manual uploads, and assignments are resolved by file name -
   explicit `model.fbx = image.png` pairs from `assignments.cfg` plus automatic
-  pairing of files sharing a base name (`dragon.fbx` + `dragon.png`). The FBX
-  check is injected as a callback so the storage layer stays free of render
-  dependencies (the app passes `ModelLoader::validateModelFile`).
+  pairing of files sharing a base name (`dragon.fbx` + `dragon.png`). Pair
+  lines carry optional pose columns (`| t=x,y,z r=x,y,z s=v`, each part
+  defaulting to identity when omitted); `persistAssignment()` writes a saved
+  pose back into the cfg surgically (other lines and comments are preserved),
+  which the Configure window's Save triggers for library assets - poses
+  therefore survive restarts. The FBX check is injected as a callback so the
+  storage layer stays free of render dependencies (the app passes
+  `ModelLoader::validateModelFile`).
 
 This layer is fully unit-tested in `tests/` and builds as the `avb_storage`
 library with no UI dependencies, so CI can run it headless.

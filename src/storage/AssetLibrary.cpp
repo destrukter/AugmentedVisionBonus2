@@ -2,12 +2,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <utility>
 
 #include "storage/Assets.h"
 #include "storage/DataStore.h"
+#include "storage/Transform.h"
 
 namespace avb {
 
@@ -76,6 +80,119 @@ Id findModelByName(const DataStore& store, const std::string& name) {
     return kInvalidId;
 }
 
+/// Splits a cfg pair line (comments/blank already skipped) into its parts:
+/// `model = image [| pose]`. Returns false when there is no '='.
+bool splitPairLine(const std::string& stripped, std::string& modelName,
+                   std::string& imageName, std::string& poseSpec) {
+    const auto eq = stripped.find('=');
+    if (eq == std::string::npos) {
+        return false;
+    }
+    modelName = trim(stripped.substr(0, eq));
+    std::string rhs = trim(stripped.substr(eq + 1));
+    poseSpec.clear();
+    if (const auto bar = rhs.find('|'); bar != std::string::npos) {
+        poseSpec = trim(rhs.substr(bar + 1));
+        rhs = trim(rhs.substr(0, bar));
+    }
+    imageName = rhs;
+    return !modelName.empty() && !imageName.empty();
+}
+
+/// Parses `count` comma-separated floats out of `values`. Returns false on
+/// malformed input or wrong arity.
+bool parseFloats(const std::string& values, float* out, int count) {
+    std::stringstream in(values);
+    std::string item;
+    int parsed = 0;
+    while (std::getline(in, item, ',')) {
+        if (parsed >= count) {
+            return false;
+        }
+        const std::string token = trim(item);
+        char* end = nullptr;
+        out[parsed] = std::strtof(token.c_str(), &end);
+        if (token.empty() || end != token.c_str() + token.size()) {
+            return false;
+        }
+        ++parsed;
+    }
+    return parsed == count;
+}
+
+/// Parses the optional pose columns (`t=x,y,z r=x,y,z s=v`, any subset, any
+/// order). Malformed tokens are reported and fall back to that component's
+/// identity default.
+Transform parsePose(const std::string& spec, int lineNo,
+                    std::vector<std::string>& warnings) {
+    Transform t;
+    std::istringstream in(spec);
+    std::string token;
+    while (in >> token) {
+        const auto warn = [&](const char* reason) {
+            warnings.push_back("assignments.cfg line " + std::to_string(lineNo) +
+                               ": pose token '" + token + "' " + reason +
+                               ", using the default");
+        };
+        if (token.size() < 3 || token[1] != '=') {
+            warn("is not of the form t=x,y,z / r=x,y,z / s=v");
+            continue;
+        }
+        const char key = static_cast<char>(std::tolower(token[0]));
+        const std::string values = token.substr(2);
+        float nums[3] = {0.0f, 0.0f, 0.0f};
+        if (key == 't' && parseFloats(values, nums, 3)) {
+            t.translation = Eigen::Vector3f(nums[0], nums[1], nums[2]);
+        } else if (key == 'r' && parseFloats(values, nums, 3)) {
+            t.rotationEulerDeg = Eigen::Vector3f(nums[0], nums[1], nums[2]);
+        } else if (key == 's' && parseFloats(values, nums, 1)) {
+            if (nums[0] > 0.0f) {
+                t.scale = nums[0];
+            } else {
+                warn("has a non-positive scale");
+            }
+        } else {
+            warn("could not be parsed");
+        }
+    }
+    return t;
+}
+
+std::string formatFloat(float v) {
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%g", static_cast<double>(v));
+    return buffer;
+}
+
+/// Formats the pose columns written after `|`; empty for the identity pose
+/// (a bare pair line already means "identity").
+std::string formatPose(const Transform& t) {
+    if (t.isIdentity()) {
+        return "";
+    }
+    return "t=" + formatFloat(t.translation.x()) + "," +
+           formatFloat(t.translation.y()) + "," +
+           formatFloat(t.translation.z()) + " r=" +
+           formatFloat(t.rotationEulerDeg.x()) + "," +
+           formatFloat(t.rotationEulerDeg.y()) + "," +
+           formatFloat(t.rotationEulerDeg.z()) + " s=" + formatFloat(t.scale);
+}
+
+/// True when `filePath` is a direct child of `<root>/<subdir>` - i.e. the
+/// asset actually lives in the library and its name will resolve on the next
+/// startup scan.
+bool isInLibraryFolder(const std::string& filePath, const fs::path& root,
+                       const char* subdir) {
+    std::error_code ec;
+    const fs::path parent =
+        fs::weakly_canonical(fs::path(filePath), ec).parent_path();
+    if (ec) {
+        return false;
+    }
+    const fs::path wanted = fs::weakly_canonical(root / subdir, ec);
+    return !ec && parent == wanted;
+}
+
 } // namespace
 
 AssetLibrary::AssetLibrary(std::shared_ptr<DataStore> store,
@@ -129,15 +246,15 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
             if (stripped.empty() || stripped[0] == '#') {
                 continue;
             }
-            const auto eq = stripped.find('=');
-            if (eq == std::string::npos) {
+            std::string modelName;
+            std::string imageName;
+            std::string poseSpec;
+            if (!splitPairLine(stripped, modelName, imageName, poseSpec)) {
                 report.warnings.push_back(
                     "assignments.cfg line " + std::to_string(lineNo) +
-                    ": expected 'model-file = image-file', skipped");
+                    ": expected 'model-file = image-file [| pose]', skipped");
                 continue;
             }
-            const std::string modelName = trim(stripped.substr(0, eq));
-            const std::string imageName = trim(stripped.substr(eq + 1));
             const Id modelId = findModelByName(*store_, modelName);
             const Id imageId = findImageByName(*store_, imageName);
             if (modelId == kInvalidId || imageId == kInvalidId) {
@@ -148,9 +265,16 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
                     " not found in the library, skipped");
                 continue;
             }
-            if (!store_->findAssignment(modelId, imageId)) {
-                store_->assign(modelId, imageId);
+            Id assignmentId;
+            if (const auto existing = store_->findAssignment(modelId, imageId)) {
+                assignmentId = *existing;
+            } else {
+                assignmentId = store_->assign(modelId, imageId);
                 ++report.assignmentsCreated;
+            }
+            if (!poseSpec.empty()) {
+                store_->setTransform(
+                    assignmentId, parsePose(poseSpec, lineNo, report.warnings));
             }
         }
     }
@@ -177,6 +301,77 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
     }
 
     return report;
+}
+
+bool AssetLibrary::persistAssignment(const std::string& rootDir,
+                                     Id assignmentId) {
+    const Assignment* assignment = store_->assignment(assignmentId);
+    if (!assignment) {
+        return false;
+    }
+    const ModelAsset* model = store_->model(assignment->modelId);
+    const ImageAsset* image = store_->image(assignment->imageId);
+    if (!model || !image) {
+        return false;
+    }
+    const fs::path root(rootDir);
+    if (!isInLibraryFolder(model->filePath, root, "models") ||
+        !isInLibraryFolder(image->filePath, root, "images")) {
+        return false; // not library assets: names would not resolve on restart
+    }
+
+    std::string newLine = model->name + " = " + image->name;
+    if (const std::string pose = formatPose(assignment->transform);
+        !pose.empty()) {
+        newLine += " | " + pose;
+    }
+
+    // Rewrite only the line(s) for this pair; keep everything else - other
+    // pairs, comments, blank lines - byte-for-byte. Duplicate lines for the
+    // pair are collapsed into one (load applies them in order, so a stale
+    // duplicate would win over the update otherwise).
+    const fs::path cfgPath = root / "assignments.cfg";
+    std::vector<std::string> lines;
+    {
+        std::ifstream in(cfgPath);
+        std::string line;
+        while (std::getline(in, line)) {
+            lines.push_back(line);
+        }
+    }
+    const std::string wantedModel = toLower(model->name);
+    const std::string wantedImage = toLower(image->name);
+    bool replaced = false;
+    std::vector<std::string> out;
+    out.reserve(lines.size() + 1);
+    for (const std::string& line : lines) {
+        const std::string stripped = trim(line);
+        std::string modelName;
+        std::string imageName;
+        std::string poseSpec;
+        const bool matchesPair =
+            !stripped.empty() && stripped[0] != '#' &&
+            splitPairLine(stripped, modelName, imageName, poseSpec) &&
+            toLower(modelName) == wantedModel && toLower(imageName) == wantedImage;
+        if (!matchesPair) {
+            out.push_back(line);
+        } else if (!replaced) {
+            out.push_back(newLine);
+            replaced = true;
+        } // further duplicates of the pair are dropped
+    }
+    if (!replaced) {
+        out.push_back(newLine);
+    }
+
+    std::ofstream file(cfgPath, std::ios::trunc);
+    if (!file) {
+        return false;
+    }
+    for (const std::string& line : out) {
+        file << line << '\n';
+    }
+    return file.good();
 }
 
 } // namespace avb

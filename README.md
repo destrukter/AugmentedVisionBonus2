@@ -69,6 +69,16 @@ Assignments between them are resolved **by file name**, two ways:
 2. Automatically by base name: `dragon.fbx` + `dragon.png` are paired without
    any config entry.
 
+A pair line may carry optional pose columns after a `|`; each part can be
+omitted and defaults to the identity pose (translation 0, rotation 0, scale 1):
+
+```
+model-file.fbx = image-file.png | t=0,0.5,0 r=0,90,0 s=2
+```
+
+Poses saved in the Configure window are written back into these columns
+automatically (for library assets), so configured poses **survive restarts**.
+
 The load summary (and any validation warnings) appears in the Upload window
 and the log. Point the app at a different folder with the `AVB_LIBRARY_DIR`
 environment variable.

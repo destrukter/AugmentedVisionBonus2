@@ -57,18 +57,18 @@ bool Application::initialize() {
     store_ = std::make_shared<DataStore>();
 
     // Auto-upload the default asset library (assets/library, or the folder
-    // AVB_LIBRARY_DIR points to) so recurring images/models and their
-    // assignments are available without manual uploads. The summary is shown
-    // in the Upload window once it exists (below).
+    // AVB_LIBRARY_DIR points to) so recurring images/models, their
+    // assignments and their saved poses are available without manual uploads.
+    // The summary is shown in the Upload window once it exists (below).
     const char* libraryEnv = std::getenv("AVB_LIBRARY_DIR");
-    const std::string libraryDir = libraryEnv ? libraryEnv : "assets/library";
+    libraryDir_ = libraryEnv ? libraryEnv : "assets/library";
     AssetLibrary library(store_, &ModelLoader::validateModelFile);
-    const AssetLibrary::Report libraryReport = library.load(libraryDir);
+    const AssetLibrary::Report libraryReport = library.load(libraryDir_);
     for (const std::string& warning : libraryReport.warnings) {
         SDL_Log("Asset library: %s", warning.c_str());
     }
     SDL_Log("Asset library '%s': %d image(s), %d model(s), %d assignment(s)",
-            libraryDir.c_str(), libraryReport.imagesAdded,
+            libraryDir_.c_str(), libraryReport.imagesAdded,
             libraryReport.modelsAdded, libraryReport.assignmentsCreated);
 
     // Rendering + vision pipeline.
@@ -92,8 +92,19 @@ bool Application::initialize() {
     trackingWorker_->start();
 
     // Frontend windows. The Upload window's "Configure" button routes the
-    // chosen assignment into the Configure window.
-    configureWindow_ = std::make_unique<ConfigureWindow>(store_);
+    // chosen assignment into the Configure window. Saved poses of library
+    // assets are persisted back into assignments.cfg so they survive
+    // restarts.
+    configureWindow_ = std::make_unique<ConfigureWindow>(
+        store_, [this](Id assignmentId) {
+            AssetLibrary lib(store_, &ModelLoader::validateModelFile);
+            if (lib.persistAssignment(libraryDir_, assignmentId)) {
+                SDL_Log("Asset library: pose of assignment #%llu saved to "
+                        "%s/assignments.cfg",
+                        static_cast<unsigned long long>(assignmentId),
+                        libraryDir_.c_str());
+            }
+        });
     uploadWindow_ = std::make_unique<UploadWindow>(
         store_, [this](Id assignmentId) {
             configureWindow_->openAssignment(assignmentId);
@@ -113,7 +124,7 @@ bool Application::initialize() {
             "Library: " + std::to_string(libraryReport.imagesAdded) +
             " image(s), " + std::to_string(libraryReport.modelsAdded) +
             " model(s), " + std::to_string(libraryReport.assignmentsCreated) +
-            " assignment(s) loaded from '" + libraryDir + "'" +
+            " assignment(s) loaded from '" + libraryDir_ + "'" +
             (libraryReport.warnings.empty()
                  ? ""
                  : " - " + std::to_string(libraryReport.warnings.size()) +
