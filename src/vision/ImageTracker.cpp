@@ -19,15 +19,59 @@ constexpr int kMinGoodMatches = 12;      // before homography
 constexpr int kMinInliers = 10;          // homography RANSAC inliers
 constexpr double kRansacReprojErr = 3.0; // px
 
+// Frames are downscaled to at most this many pixels on their longest side
+// before feature detection; matching quality barely changes but per-frame cost
+// drops several-fold. All reported coordinates/poses stay in full-frame pixels.
+constexpr int kMaxDetectDim = 640;
+
+// Templates are likewise capped: a multi-megapixel upload viewed from across a
+// room appears far smaller in the frame than its file resolution, which would
+// exceed ORB's pyramid scale range and produce zero matches.
+constexpr int kMaxTemplateDim = 640;
+
+// If the frame yields fewer features than this, detection is retried once with
+// a lower FAST threshold, which recovers corners in dim / low-contrast scenes.
+constexpr int kMinFrameFeatures = 300;
+constexpr int kFallbackFastThreshold = 7;
+
+// A detected quad smaller than this (in full-frame px^2) is treated as a
+// degenerate homography rather than a real sighting.
+constexpr double kMinQuadAreaPx = 300.0;
+
 // The registered image is mapped onto a planar quad whose width spans one
 // world unit, centred at the origin, lying in the XY plane with +Y up and +Z
 // pointing out of the image toward the viewer. Configured model transforms are
 // expressed relative to this frame.
 constexpr float kPlaneWidth = 1.0f;
 
-cv::Ptr<cv::ORB>& orb() {
-    static cv::Ptr<cv::ORB> instance = cv::ORB::create(kMaxFeatures);
-    return instance;
+// Downscales `src` so its longest side is at most `maxDim`. Returns the scale
+// applied (1.0 when no resize was needed).
+double capSize(const cv::Mat& src, cv::Mat& dst, int maxDim) {
+    const int longest = std::max(src.cols, src.rows);
+    if (longest <= maxDim) {
+        dst = src;
+        return 1.0;
+    }
+    const double scale = static_cast<double>(maxDim) / longest;
+    cv::resize(src, dst, cv::Size(), scale, scale, cv::INTER_AREA);
+    return scale;
+}
+
+// True when the four projected template corners form a plausible sighting:
+// finite, convex and covering a non-trivial area. Homographies fitted to
+// borderline match sets can pass RANSAC yet map the template to a degenerate
+// (bow-tie / near-line / microscopic) quad; rejecting those here removes most
+// of the overlay's "jumping" misdetections.
+bool isPlausibleQuad(const std::vector<cv::Point2f>& corners) {
+    for (const cv::Point2f& c : corners) {
+        if (!std::isfinite(c.x) || !std::isfinite(c.y)) {
+            return false;
+        }
+    }
+    if (!cv::isContourConvex(corners)) {
+        return false;
+    }
+    return std::abs(cv::contourArea(corners)) >= kMinQuadAreaPx;
 }
 
 } // namespace
@@ -35,32 +79,47 @@ cv::Ptr<cv::ORB>& orb() {
 /// Per-target feature data (kept out of the header).
 struct ImageTracker::Target {
     Id imageId{kInvalidId};
-    cv::Mat grayTemplate;
     std::vector<cv::KeyPoint> keypoints;
     cv::Mat descriptors;
-    cv::Size sizePx;
+    cv::Size sizePx;  // template size the keypoints are expressed in
 };
 
-ImageTracker::ImageTracker() = default;
+ImageTracker::ImageTracker()
+    : orb_(cv::ORB::create(kMaxFeatures)),
+      clahe_(cv::createCLAHE(/*clipLimit=*/3.0, /*tileGridSize=*/{8, 8})) {}
+
 ImageTracker::~ImageTracker() = default;
 
 void ImageTracker::addTarget(Id imageId, const cv::Mat& image) {
     if (image.empty()) {
         return;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
+
     // Replace any existing target for this id so re-uploads stay in sync.
-    removeTarget(imageId);
+    targets_.erase(std::remove_if(targets_.begin(), targets_.end(),
+                                  [imageId](const Target& t) {
+                                      return t.imageId == imageId;
+                                  }),
+                   targets_.end());
+
+    cv::Mat gray;
+    if (image.channels() == 1) {
+        gray = image;
+    } else {
+        cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+    }
+    cv::Mat capped;
+    capSize(gray, capped, kMaxTemplateDim);
+    // Normalise contrast the same way frames are normalised in detect() so
+    // descriptors stay comparable regardless of the upload's exposure.
+    cv::Mat equalized;
+    clahe_->apply(capped, equalized);
 
     Target t;
     t.imageId = imageId;
-    if (image.channels() == 1) {
-        t.grayTemplate = image.clone();
-    } else {
-        cv::cvtColor(image, t.grayTemplate, cv::COLOR_BGR2GRAY);
-    }
-    t.sizePx = t.grayTemplate.size();
-    orb()->detectAndCompute(t.grayTemplate, cv::noArray(), t.keypoints,
-                            t.descriptors);
+    t.sizePx = equalized.size();
+    orb_->detectAndCompute(equalized, cv::noArray(), t.keypoints, t.descriptors);
     if (t.descriptors.empty()) {
         return; // featureless image -> not trackable, drop it
     }
@@ -68,6 +127,7 @@ void ImageTracker::addTarget(Id imageId, const cv::Mat& image) {
 }
 
 void ImageTracker::removeTarget(Id imageId) {
+    std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = targets_.begin(); it != targets_.end(); ++it) {
         if (it->imageId == imageId) {
             targets_.erase(it);
@@ -77,12 +137,17 @@ void ImageTracker::removeTarget(Id imageId) {
 }
 
 void ImageTracker::clearTargets() {
+    std::lock_guard<std::mutex> lock(mutex_);
     targets_.clear();
 }
 
 std::vector<Detection> ImageTracker::detect(const cv::Mat& frame) {
     std::vector<Detection> detections;
-    if (frame.empty() || targets_.empty()) {
+    if (frame.empty()) {
+        return detections;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (targets_.empty()) {
         return detections;
     }
 
@@ -93,20 +158,40 @@ std::vector<Detection> ImageTracker::detect(const cv::Mat& frame) {
         cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
     }
 
+    // Detect on a downscaled, contrast-normalised copy; keypoint coordinates
+    // are mapped back to full-frame pixels for homography/PnP below.
+    cv::Mat small;
+    const double detectScale = capSize(gray, small, kMaxDetectDim);
+    cv::Mat equalized;
+    clahe_->apply(small, equalized);
+
     std::vector<cv::KeyPoint> frameKeypoints;
     cv::Mat frameDescriptors;
-    orb()->detectAndCompute(gray, cv::noArray(), frameKeypoints, frameDescriptors);
+    orb_->detectAndCompute(equalized, cv::noArray(), frameKeypoints,
+                           frameDescriptors);
+    if (static_cast<int>(frameKeypoints.size()) < kMinFrameFeatures) {
+        // Dim / low-contrast frame: retry once with a permissive corner
+        // threshold before giving up, then restore the default.
+        if (auto orb = orb_.dynamicCast<cv::ORB>()) {
+            const int previous = orb->getFastThreshold();
+            orb->setFastThreshold(kFallbackFastThreshold);
+            orb_->detectAndCompute(equalized, cv::noArray(), frameKeypoints,
+                                   frameDescriptors);
+            orb->setFastThreshold(previous);
+        }
+    }
     if (frameDescriptors.empty()) {
         return detections;
     }
+    const float invScale = static_cast<float>(1.0 / detectScale);
 
     // Intrinsics: use the configured matrix, else a sensible default derived
-    // from the frame size (focal chosen to match OGRE's default 45deg vertical
-    // FOV so the overlay roughly aligns with the rendered camera).
+    // from the frame size (focal chosen to match the renderer's kDefaultFovYDeg
+    // vertical FOV so the overlay aligns with the rendered camera).
     cv::Mat K = cameraMatrix_;
     cv::Mat dist = distCoeffs_;
     if (K.empty()) {
-        const double fovY = 45.0 * CV_PI / 180.0;
+        const double fovY = kDefaultFovYDeg * CV_PI / 180.0;
         const double f = (frame.rows * 0.5) / std::tan(fovY * 0.5);
         K = (cv::Mat_<double>(3, 3) << f, 0, frame.cols * 0.5, 0, f,
              frame.rows * 0.5, 0, 0, 1);
@@ -129,16 +214,19 @@ std::vector<Detection> ImageTracker::detect(const cv::Mat& frame) {
             }
             if (pair[0].distance < kLoweRatio * pair[1].distance) {
                 templatePts.push_back(target.keypoints[pair[0].queryIdx].pt);
-                framePts.push_back(frameKeypoints[pair[0].trainIdx].pt);
+                framePts.push_back(frameKeypoints[pair[0].trainIdx].pt * invScale);
             }
         }
         if (static_cast<int>(templatePts.size()) < kMinGoodMatches) {
             continue;
         }
 
+        // The tolerance is defined in detection pixels; framePts were scaled
+        // back to full-frame coordinates, so scale the threshold with them.
+        const double ransacErr = kRansacReprojErr / detectScale;
         std::vector<unsigned char> inlierMask;
         const cv::Mat H = cv::findHomography(templatePts, framePts, cv::RANSAC,
-                                             kRansacReprojErr, inlierMask);
+                                             ransacErr, inlierMask);
         if (H.empty()) {
             continue;
         }
@@ -148,19 +236,23 @@ std::vector<Detection> ImageTracker::detect(const cv::Mat& frame) {
             continue;
         }
 
-        // Build coplanar object/image correspondences from the inliers and
-        // recover the image-plane pose with a planar PnP solver.
         const float w = static_cast<float>(target.sizePx.width);
         const float h = static_cast<float>(target.sizePx.height);
 
-        // Project the template boundary into the frame for a debug outline.
+        // Project the template boundary into the frame; used both as the debug
+        // outline and to reject degenerate homographies.
         const std::vector<cv::Point2f> templateCorners = {
             {0.0f, 0.0f}, {w, 0.0f}, {w, h}, {0.0f, h}};
         std::vector<cv::Point2f> frameCorners;
         cv::perspectiveTransform(templateCorners, frameCorners, H);
+        if (!isPlausibleQuad(frameCorners)) {
+            continue;
+        }
         const float planeW = kPlaneWidth;
         const float planeH = w > 0.0f ? kPlaneWidth * (h / w) : kPlaneWidth;
 
+        // Build coplanar object/image correspondences from the inliers and
+        // recover the image-plane pose with a planar PnP solver.
         std::vector<cv::Point3f> objectPts;
         std::vector<cv::Point2f> imagePts;
         objectPts.reserve(inliers);
@@ -185,6 +277,9 @@ std::vector<Detection> ImageTracker::detect(const cv::Mat& frame) {
         if (!ok) {
             continue;
         }
+        // Polish the closed-form IPPE solution; a few LM iterations noticeably
+        // reduce frame-to-frame pose jitter for near-planar viewing angles.
+        cv::solvePnPRefineLM(objectPts, imagePts, K, dist, rvec, tvec);
 
         cv::Mat Rcv;
         cv::Rodrigues(rvec, Rcv); // object -> OpenCV camera (X right, Y down, Z fwd)
@@ -217,8 +312,29 @@ std::vector<Detection> ImageTracker::detect(const cv::Mat& frame) {
 
 void ImageTracker::setCameraIntrinsics(const cv::Mat& cameraMatrix,
                                        const cv::Mat& distCoeffs) {
+    std::lock_guard<std::mutex> lock(mutex_);
     cameraMatrix_ = cameraMatrix.clone();
     distCoeffs_ = distCoeffs.clone();
+}
+
+int ImageTracker::countTrackableFeatures(const cv::Mat& image) {
+    if (image.empty()) {
+        return 0;
+    }
+    cv::Mat gray;
+    if (image.channels() == 1) {
+        gray = image;
+    } else {
+        cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+    }
+    cv::Mat capped;
+    capSize(gray, capped, kMaxTemplateDim);
+    cv::Mat equalized;
+    cv::createCLAHE(3.0, {8, 8})->apply(capped, equalized);
+
+    std::vector<cv::KeyPoint> keypoints;
+    cv::ORB::create(kMaxFeatures)->detect(equalized, keypoints);
+    return static_cast<int>(keypoints.size());
 }
 
 } // namespace avb

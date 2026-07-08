@@ -26,6 +26,33 @@ const Ogre::String& defaultGroup() {
 
 ModelLoader::ModelLoader(OgreContext& context) : context_(context) {}
 
+bool ModelLoader::validateModelFile(const std::string& filePath,
+                                    std::string* error) {
+    Assimp::Importer importer;
+    // Triangulate mirrors loadFbx() closely enough to predict whether it will
+    // succeed, while skipping the heavier post-processing steps.
+    const aiScene* scene =
+        importer.ReadFile(filePath, aiProcess_Triangulate);
+    if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) ||
+        !scene->mRootNode) {
+        if (error) {
+            const char* reason = importer.GetErrorString();
+            *error = (reason && reason[0]) ? reason
+                                           : "file could not be parsed as a model";
+        }
+        return false;
+    }
+    for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
+        if (scene->mMeshes[m]->mNumVertices > 0) {
+            return true;
+        }
+    }
+    if (error) {
+        *error = "model contains no mesh geometry";
+    }
+    return false;
+}
+
 std::string ModelLoader::ensureDefaultMaterial() {
     if (defaultMaterialCreated_) {
         return kDefaultMaterial;

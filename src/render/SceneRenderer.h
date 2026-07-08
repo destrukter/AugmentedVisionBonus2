@@ -15,7 +15,6 @@ class Camera;
 class SceneNode;
 class Light;
 class RenderTexture;
-class RenderWindow;
 } // namespace Ogre
 
 namespace avb {
@@ -46,33 +45,21 @@ public:
     /// Creates the camera, light and off-screen render target of the given size.
     bool initialize(int width, int height);
 
-    /// Loads a small built-in cube (no FBX/Assimp import needed) and shows it a
-    /// few units in front of the camera. Call once after initialize(). This is
-    /// a startup sanity check for the OGRE + RTT-compositing pipeline: it
-    /// stays visible independent of any uploaded model, image or tracked pose,
-    /// so a black/empty Camera window can be narrowed down to a rendering
-    /// problem rather than a tracking or asset problem.
-    void showDebugCube();
-
-    /// Opens a plain, real OS window that shows this scene's camera view
-    /// directly through OGRE's own presentation (no off-screen RTT, no CPU
-    /// read-back, no OpenCV compositing, no ImGui texture re-upload). Purely
-    /// a debugging aid: it isolates whether the OGRE scene itself renders
-    /// correctly from whether the Camera window's composite/re-upload
-    /// pipeline is what's hiding something. Call once, after initialize().
-    /// Returns false if the window could not be created.
-    bool showDebugWindow(int width, int height);
-
-    /// Presents one frame of the debug window opened by showDebugWindow().
-    /// No-op if that window was never created. Call once per application
-    /// loop tick, independent of beginFrame()/endFrame().
-    void updateDebugWindow();
-
     void beginFrame(const cv::Mat& cameraFrame);
     /// Places the model for `modelId` at `pose` (a 4x4 camera-space matrix) and
     /// makes it visible. Lazily loads/instantiates the mesh on first use.
     void drawModel(Id modelId, const Eigen::Matrix4f& pose);
     void endFrame();
+
+    /// Computes a camera-space framing pose for previewing `modelId` with
+    /// `configured` (the assignment transform) applied: the model is centered,
+    /// tilted (plus `yawDeg` for a turntable spin) and pushed back far enough
+    /// that its whole bounding sphere fits the view - a fixed distance would
+    /// put the camera inside large models or show flat ones edge-on as a bare
+    /// sliver. Pass the result to drawModel as `pose * configured`. Returns
+    /// false when the model cannot be loaded.
+    bool previewFramingPose(Id modelId, const Eigen::Matrix4f& configured,
+                            float yawDeg, Eigen::Matrix4f& outPose);
 
     /// Composited RGBA image (camera frame + rendered models). Empty until the
     /// first endFrame(). CV_8UC4.
@@ -83,6 +70,10 @@ public:
 
 private:
     Ogre::SceneNode* ensureNode(Id modelId);
+    /// (Re)creates the off-screen render target at the given size. Called from
+    /// initialize() and again whenever the camera frame size changes.
+    bool createRenderTarget(int width, int height);
+    void destroyRenderTarget();
 
     std::shared_ptr<OgreContext> context_;
     std::shared_ptr<ModelLoader> loader_;
@@ -98,17 +89,16 @@ private:
     // modelId -> scene node (created on demand).
     std::unordered_map<Id, Ogre::SceneNode*> nodes_;
 
-    Ogre::SceneNode* debugNode_{nullptr};  // startup sanity-check cube, see showDebugCube()
-    Ogre::RenderWindow* debugWindow_{nullptr};  // raw preview window, see showDebugWindow()
-
     cv::Mat cameraFrame_;            // latest BGR frame (may be empty)
     cv::Mat composited_;             // RGBA output
+    cv::Mat drawnMask_;              // compositing scratch (see endFrame)
+    cv::Mat solidAlpha_;             // cached all-255 plane for opaque output
     std::vector<unsigned char> readback_;  // RGBA scratch for RTT readback
 
     int width_{0};
     int height_{0};
+    int visibleModels_{0};           // models drawn since beginFrame()
     bool initialized_{false};
-    bool debugOverlayLogged_{false};  // one-shot RTT pixel-stats diagnostic, see endFrame()
 };
 
 } // namespace avb

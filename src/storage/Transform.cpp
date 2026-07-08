@@ -19,13 +19,13 @@ Eigen::Matrix3f Transform::rotationMatrix() const {
 
 Eigen::Matrix4f Transform::toMatrix() const {
     Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
-    m.block<3, 3>(0, 0) = rotationMatrix() * scale;
+    m.block<3, 3>(0, 0) = rotationMatrix() * scale.asDiagonal();
     m.block<3, 1>(0, 3) = translation;
     return m;
 }
 
 bool Transform::isIdentity() const {
-    return translation.isZero() && rotationEulerDeg.isZero() && scale == 1.0f;
+    return translation.isZero() && rotationEulerDeg.isZero() && scale.isOnes();
 }
 
 } // namespace avb

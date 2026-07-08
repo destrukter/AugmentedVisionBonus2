@@ -19,8 +19,8 @@ struct Transform {
     /// Defaults to (0, 0, 0).
     Eigen::Vector3f rotationEulerDeg{Eigen::Vector3f::Zero()};
 
-    /// Uniform scale. Defaults to 1.
-    float scale{1.0f};
+    /// Per-axis scale (x, y, z). Defaults to (1, 1, 1).
+    Eigen::Vector3f scale{Eigen::Vector3f::Ones()};
 
     /// 3x3 rotation matrix built from the Euler angles.
     Eigen::Matrix3f rotationMatrix() const;
