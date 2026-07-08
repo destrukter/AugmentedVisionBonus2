@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include <Eigen/Core>
+
 #include "storage/Transform.h"
 #include "storage/Types.h"
 #include "ui/Window.h"
@@ -46,6 +48,11 @@ private:
     float orbitYawDeg_{40.0f};    ///< Viewport camera orbit around the plane.
     float orbitPitchDeg_{30.0f};
     float orbitDistance_{3.0f};
+    /// Matrix the gizmo manipulates. Kept across the frames of one drag (and
+    /// only rebuilt from working_ while the gizmo is idle) because rebuilding
+    /// it from the decomposed Euler angles mid-drag makes the handles snap at
+    /// representation boundaries.
+    Eigen::Matrix4f gizmoMatrix_{Eigen::Matrix4f::Identity()};
 };
 
 } // namespace avb

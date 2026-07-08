@@ -11,6 +11,7 @@
 
 #include "storage/Assets.h"
 #include "storage/DataStore.h"
+#include "ui/Panels.h"
 
 namespace avb {
 
@@ -19,16 +20,6 @@ namespace {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegToRad = kPi / 180.0f;
 constexpr float kRadToDeg = 180.0f / kPi;
-
-void beginFullWindow(const char* name) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin(name, nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
-}
 
 // Column-major (OpenGL-style) right-handed perspective projection, the layout
 // ImGuizmo expects. Eigen matrices are column-major by default, so .data()
@@ -99,6 +90,37 @@ bool projectToScreen(const Eigen::Matrix4f& viewProj, const Eigen::Vector3f& p,
     return true;
 }
 
+// Draws a wireframe cube proxy for the model at `model` (its full transform,
+// including scale) so every pose edit - translation, rotation and notably
+// scale - is visible in the viewport even though the real mesh isn't loaded
+// here.
+void drawModelProxy(ImDrawList* drawList, const Eigen::Matrix4f& viewProj,
+                    const Eigen::Matrix4f& model, const ImVec2& rectPos,
+                    const ImVec2& rectSize) {
+    constexpr float h = 0.25f; // half edge length: a 0.5-unit cube at scale 1
+    const Eigen::Vector3f corners[8] = {
+        {-h, -h, -h}, {h, -h, -h}, {h, h, -h}, {-h, h, -h},
+        {-h, -h, h},  {h, -h, h},  {h, h, h},  {-h, h, h}};
+    static constexpr int kEdges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0},
+                                          {4, 5}, {5, 6}, {6, 7}, {7, 4},
+                                          {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+    ImVec2 screen[8];
+    bool visible[8];
+    for (int i = 0; i < 8; ++i) {
+        const Eigen::Vector4f world =
+            model * Eigen::Vector4f(corners[i].x(), corners[i].y(),
+                                    corners[i].z(), 1.0f);
+        visible[i] = projectToScreen(viewProj, world.head<3>(), rectPos,
+                                     rectSize, screen[i]);
+    }
+    const ImU32 color = IM_COL32(250, 200, 90, 220);
+    for (const auto& e : kEdges) {
+        if (visible[e[0]] && visible[e[1]]) {
+            drawList->AddLine(screen[e[0]], screen[e[1]], color, 1.5f);
+        }
+    }
+}
+
 } // namespace
 
 ConfigureWindow::ConfigureWindow(std::shared_ptr<DataStore> store)
@@ -131,7 +153,11 @@ float ConfigureWindow::imagePlaneAspect() const {
 void ConfigureWindow::drawUi() {
     ImGuizmo::BeginFrame();
 
-    beginFullWindow("Configure");
+    // No scrolling: the gizmo viewport below fills whatever space remains, so
+    // the panel's content always fits exactly (and an avail-sized canvas
+    // inside a scrolling window would grow with every scroll, pushing these
+    // controls permanently out of view).
+    beginFullWindow("Configure", /*allowScroll=*/false);
 
     if (activeAssignment_ == kInvalidId) {
         ImGui::TextDisabled(
@@ -146,21 +172,10 @@ void ConfigureWindow::drawUi() {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "(unsaved)");
     }
-
-    ImGui::RadioButton("Move", &gizmoOperation_, 0);
-    ImGui::SameLine();
-    ImGui::RadioButton("Rotate", &gizmoOperation_, 1);
-    ImGui::SameLine();
-    ImGui::RadioButton("Scale", &gizmoOperation_, 2);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(drag handles; right-drag orbits, wheel zooms)");
-
-    drawGizmoViewport();
-
     ImGui::Separator();
 
-    // Numeric fallback bound to the same working copy; any change marks it
-    // dirty. Kept alongside the gizmo for exact values.
+    // Numeric controls bound to the working copy; the gizmo below edits the
+    // same values interactively. Any change marks the pose dirty.
     bool changed = false;
     changed |= ImGui::DragFloat3("Translation (x,y,z)",
                                  working_.translation.data(), 0.01f);
@@ -169,16 +184,13 @@ void ConfigureWindow::drawUi() {
     changed |= ImGui::DragFloat("Scale", &working_.scale, 0.01f, 0.001f, 1000.0f);
     dirty_ = dirty_ || changed;
 
-    if (ImGui::TreeNode("Model matrix")) {
-        const Eigen::Matrix4f m = working_.toMatrix();
-        for (int r = 0; r < 4; ++r) {
-            ImGui::Text("% .3f  % .3f  % .3f  % .3f", m(r, 0), m(r, 1), m(r, 2),
-                        m(r, 3));
-        }
-        ImGui::TreePop();
+    ImGui::TextDisabled("Model matrix preview");
+    const Eigen::Matrix4f preview = working_.toMatrix();
+    for (int r = 0; r < 4; ++r) {
+        ImGui::Text("% .3f  % .3f  % .3f  % .3f", preview(r, 0), preview(r, 1),
+                    preview(r, 2), preview(r, 3));
     }
 
-    ImGui::Spacing();
     if (ImGui::Button("Save")) {
         save();
     }
@@ -186,15 +198,28 @@ void ConfigureWindow::drawUi() {
     if (ImGui::Button("Revert")) {
         revert();
     }
+    ImGui::SameLine();
+    // The ##op suffixes keep these IDs distinct from the identically-labelled
+    // widgets above ("Scale" collides with the Scale drag field otherwise,
+    // and ImGui routes all clicks on duplicate IDs to whichever item was
+    // submitted first - leaving one of the two dead).
+    ImGui::RadioButton("Move##op", &gizmoOperation_, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("Rotate##op", &gizmoOperation_, 1);
+    ImGui::SameLine();
+    ImGui::RadioButton("Scale##op", &gizmoOperation_, 2);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(right-drag orbits, wheel zooms)");
+
+    drawGizmoViewport();
 
     ImGui::End();
 }
 
 void ConfigureWindow::drawGizmoViewport() {
-    // Reserve the viewport, leaving room for the numeric controls below.
+    // The viewport takes all remaining panel space below the controls.
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const ImVec2 canvasSize(std::max(avail.x, 120.0f),
-                            std::max(200.0f, avail.y - 190.0f));
+    const ImVec2 canvasSize(std::max(avail.x, 120.0f), std::max(avail.y, 120.0f));
     const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
@@ -202,7 +227,13 @@ void ConfigureWindow::drawGizmoViewport() {
         canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y),
         IM_COL32(26, 28, 33, 255), 4.0f);
 
-    ImGui::InvisibleButton("##gizmo_viewport", canvasSize);
+    // Reserve the space with Dummy, NOT InvisibleButton: ImGuizmo only lets a
+    // handle be grabbed while no ImGui item is hovered (CanActivate checks
+    // IsAnyItemHovered), and a button covering the canvas keeps an item
+    // hovered whenever the mouse is over the viewport, making every gizmo
+    // handle dead. Dummy reserves layout space without ever registering as
+    // the hovered item, while IsItemHovered() still works for orbit/zoom.
+    ImGui::Dummy(canvasSize);
 
     // Orbit / zoom the viewport camera.
     if (ImGui::IsItemHovered()) {
@@ -262,7 +293,17 @@ void ConfigureWindow::drawGizmoViewport() {
         }
     }
 
-    // The gizmo itself, manipulating the working transform in place.
+    // Keep manipulating one cached matrix for the whole drag instead of
+    // rebuilding it from the decomposed Euler angles every frame: Euler
+    // decomposition is not unique, and feeding a re-decomposed matrix back
+    // into an active drag makes the gizmo snap at representation boundaries.
+    if (!ImGuizmo::IsUsing()) {
+        gizmoMatrix_ = working_.toMatrix();
+    }
+
+    // The model proxy reflects the live matrix, so scale edits are visible.
+    drawModelProxy(drawList, viewProj, gizmoMatrix_, canvasPos, canvasSize);
+
     ImGuizmo::SetOrthographic(false);
     ImGuizmo::SetDrawlist(drawList);
     ImGuizmo::SetRect(canvasPos.x, canvasPos.y, canvasSize.x, canvasSize.y);
@@ -279,9 +320,9 @@ void ConfigureWindow::drawGizmoViewport() {
         mode = ImGuizmo::LOCAL; // ImGuizmo scales locally regardless
     }
 
-    Eigen::Matrix4f model = working_.toMatrix();
-    if (ImGuizmo::Manipulate(view.data(), proj.data(), op, mode, model.data())) {
-        working_ = decomposeToTransform(model);
+    if (ImGuizmo::Manipulate(view.data(), proj.data(), op, mode,
+                             gizmoMatrix_.data())) {
+        working_ = decomposeToTransform(gizmoMatrix_);
         dirty_ = true;
     }
 }

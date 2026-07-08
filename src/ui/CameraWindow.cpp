@@ -14,6 +14,7 @@
 #include "render/SceneRenderer.h"
 #include "storage/Assets.h"
 #include "storage/DataStore.h"
+#include "ui/Panels.h"
 #include "vision/CaptureWorker.h"
 #include "vision/ImageTracker.h"
 #include "vision/TrackingWorker.h"
@@ -21,16 +22,6 @@
 namespace avb {
 
 namespace {
-
-void beginFullWindow(const char* name) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin(name, nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
-}
 
 // A fixed pose placing a model a little in front of the camera (looking down
 // -Z), used for the preview fallback when nothing is tracked yet.
@@ -102,7 +93,9 @@ void CameraWindow::drawUi() {
     // reacquired for the frame; nothing here needs to touch OGRE's context.
     uploadCompositedToTexture();
 
-    beginFullWindow("Camera");
+    // No scrolling: the letterboxed image is sized from the available region,
+    // which would grow with every scroll inside a scrolling window.
+    beginFullWindow("Camera", /*allowScroll=*/false);
 
     const bool camOpen = capture_ && capture_->cameraOpen();
     if (camOpen) {

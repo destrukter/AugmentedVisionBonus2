@@ -9,6 +9,7 @@
 
 #include "render/ModelLoader.h"
 #include "storage/DataStore.h"
+#include "ui/Panels.h"
 #include "vision/ImageTracker.h"
 
 namespace avb {
@@ -22,18 +23,6 @@ constexpr int kLowFeatureThreshold = 60;
 std::string fileNameOf(const std::string& path) {
     const auto slash = path.find_last_of("/\\");
     return slash == std::string::npos ? path : path.substr(slash + 1);
-}
-
-// Makes the next ImGui window fill the whole OS window (each OS window hosts a
-// single top-level panel).
-void beginFullWindow(const char* name) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin(name, nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
 }
 
 // Opens a native "Open File" dialog restricted to `filter` (e.g. "png,jpg").
@@ -63,7 +52,9 @@ UploadWindow::UploadWindow(std::shared_ptr<DataStore> store,
       onConfigure_(std::move(onConfigure)) {}
 
 void UploadWindow::drawUi() {
-    beginFullWindow("Upload");
+    // Scrolling allowed: the asset/assignment lists have fixed-size rows and
+    // may legitimately overflow a small window.
+    beginFullWindow("Upload", /*allowScroll=*/true);
     drawUploadSection();
     ImGui::Separator();
     drawAssignmentSection();
