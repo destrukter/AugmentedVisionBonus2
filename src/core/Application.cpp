@@ -130,7 +130,7 @@ bool Application::initialize() {
     if (!ogre_->initialize()) {
         return false;
     }
-    modelLoader_ = std::make_shared<ModelLoader>(*ogre_);
+    modelLoader_ = std::make_shared<ModelLoader>();
     renderer_ = std::make_shared<SceneRenderer>(ogre_, modelLoader_, store_);
     if (!renderer_->initialize(1280, 720)) {
         return false;

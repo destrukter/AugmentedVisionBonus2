@@ -30,6 +30,24 @@ target_link_libraries(avb_vision
 )
 target_include_directories(avb_vision PUBLIC ${OpenCV_INCLUDE_DIRS})
 
+# Model import (FBX -> OGRE mesh/skeleton/animations) is a standalone library
+# so it can be unit-tested headless: it only uses OGRE's CPU-side resource
+# managers, which tests can bootstrap without a window or GPU.
+add_library(avb_model
+    render/ModelLoader.cpp
+)
+target_include_directories(avb_model PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+    ${OGRE_INCLUDE_DIRS}
+)
+target_link_libraries(avb_model
+    PUBLIC
+        ${OpenCV_LIBS}
+        assimp::assimp
+        OgreMain
+)
+
 # Main application executable.
 add_executable(AugmentedVisionBonus2
     main.cpp
@@ -40,7 +58,6 @@ add_executable(AugmentedVisionBonus2
     ui/CameraWindow.cpp
     render/ConfigurePreview.cpp
     render/OgreContext.cpp
-    render/ModelLoader.cpp
     render/SceneRenderer.cpp
 )
 
@@ -67,6 +84,7 @@ target_compile_definitions(AugmentedVisionBonus2 PRIVATE
 target_link_libraries(AugmentedVisionBonus2 PRIVATE
     avb_storage
     avb_vision
+    avb_model
     Eigen3::Eigen
     ${OpenCV_LIBS}
     assimp::assimp

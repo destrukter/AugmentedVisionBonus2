@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -11,6 +12,7 @@
 #include "storage/Types.h"
 
 namespace Ogre {
+class AnimationState;
 class Camera;
 class Entity;
 class SceneNode;
@@ -79,6 +81,9 @@ private:
     struct ModelInstance {
         Ogre::SceneNode* node{nullptr};
         Ogre::Entity* entity{nullptr};
+        /// The model's first animation, enabled and looping; null for static
+        /// models. Advanced each frame the instance is drawn (see endFrame).
+        Ogre::AnimationState* animation{nullptr};
     };
     struct InstancePool {
         std::vector<ModelInstance> instances;
@@ -121,6 +126,10 @@ private:
     int height_{0};
     int visibleModels_{0};           // models drawn since beginFrame()
     bool initialized_{false};
+
+    // Wall-clock of the previous endFrame(), for advancing model animations.
+    std::chrono::steady_clock::time_point lastAnimTick_{};
+    bool haveAnimTick_{false};
 };
 
 } // namespace avb

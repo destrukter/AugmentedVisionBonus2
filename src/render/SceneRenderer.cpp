@@ -7,6 +7,7 @@
 #include <Eigen/Geometry>
 #include <opencv2/imgproc.hpp>
 
+#include <OgreAnimationState.h>
 #include <OgreCamera.h>
 #include <OgreEntity.h>
 #include <OgreHardwarePixelBuffer.h>
@@ -26,6 +27,28 @@
 #include "vision/ImageTracker.h"
 
 namespace avb {
+
+namespace {
+
+/// Enables the entity's first animation (looping) and returns its state, or
+/// null when the mesh carries no animations. Playing the first animation
+/// automatically means an animated FBX moves without any configuration.
+Ogre::AnimationState* enableFirstAnimation(Ogre::Entity* entity) {
+    Ogre::AnimationStateSet* states = entity->getAllAnimationStates();
+    if (!states) {
+        return nullptr;
+    }
+    auto it = states->getAnimationStateIterator();
+    if (!it.hasMoreElements()) {
+        return nullptr;
+    }
+    Ogre::AnimationState* state = it.getNext();
+    state->setEnabled(true);
+    state->setLoop(true);
+    return state;
+}
+
+} // namespace
 
 SceneRenderer::SceneRenderer(std::shared_ptr<OgreContext> context,
                              std::shared_ptr<ModelLoader> loader,
@@ -168,6 +191,7 @@ SceneRenderer::ModelInstance* SceneRenderer::ensureFirstInstance(Id modelId) {
     instance.entity =
         sm->createEntity("avb/ent/" + std::to_string(modelId) + "/0", mesh);
     instance.entity->setVisibilityFlags(kMainSceneVisibilityMask);
+    instance.animation = enableFirstAnimation(instance.entity);
     instance.node = worldRoot_->createChildSceneNode();
     instance.node->attachObject(instance.entity);
     pool.instances.push_back(instance);
@@ -192,6 +216,7 @@ SceneRenderer::ModelInstance* SceneRenderer::acquireInstance(Id modelId) {
             std::to_string(pool.instances.size()),
         pool.instances.front().entity->getMesh());
     instance.entity->setVisibilityFlags(kMainSceneVisibilityMask);
+    instance.animation = enableFirstAnimation(instance.entity);
     instance.node = worldRoot_->createChildSceneNode();
     instance.node->attachObject(instance.entity);
     pool.instances.push_back(instance);
@@ -295,6 +320,19 @@ void SceneRenderer::endFrame() {
         return;
     }
 
+    // Real time elapsed since the previous frame, for animation playback.
+    // Clamped so a stall (window drag, camera hiccup) doesn't make animations
+    // leap; measured every frame so playback resumes smoothly regardless of
+    // how long no model was visible.
+    const auto now = std::chrono::steady_clock::now();
+    float animDt = 0.0f;
+    if (haveAnimTick_) {
+        animDt = std::chrono::duration<float>(now - lastAnimTick_).count();
+    }
+    lastAnimTick_ = now;
+    haveAnimTick_ = true;
+    animDt = std::min(animDt, 0.1f);
+
     // Build the RGBA background from the camera frame (BGR -> RGBA), or black.
     // beginFrame() sized the render target to the frame, so no resize is needed.
     if (composited_.empty() || composited_.rows != height_ ||
@@ -309,6 +347,17 @@ void SceneRenderer::endFrame() {
 
     if (visibleModels_ == 0 || !renderTarget_) {
         return; // nothing rendered: skip the OGRE pass and GPU readback entirely
+    }
+
+    // Advance the animations of every instance drawn this frame.
+    if (animDt > 0.0f) {
+        for (auto& [id, pool] : pools_) {
+            for (std::size_t i = 0; i < pool.used; ++i) {
+                if (pool.instances[i].animation) {
+                    pool.instances[i].animation->addTime(animDt);
+                }
+            }
+        }
     }
 
     renderTarget_->update();

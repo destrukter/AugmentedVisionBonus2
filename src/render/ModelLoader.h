@@ -5,8 +5,6 @@
 
 namespace avb {
 
-class OgreContext;
-
 /// Loads FBX files with Assimp and converts them into OGRE meshes.
 ///
 /// OGRE has no native FBX importer, so Assimp parses the file and the resulting
@@ -16,9 +14,20 @@ class OgreContext;
 /// shininess, two-sidedness, vertex colors and diffuse textures (embedded or
 /// external, decoded through OpenCV so no OGRE codec plugin is needed).
 /// Submeshes without a usable material fall back to a shared default.
+///
+/// Animations come along too: when the file contains animations, the whole
+/// node hierarchy is mirrored into an Ogre::Skeleton (one bone per node) and
+/// every animation becomes a skeletal animation on it. Skinned meshes keep
+/// their per-vertex bone weights; meshes without weights are bound rigidly to
+/// their node's bone, so plain node/transform animations play as well.
+/// Entities instantiated from the mesh then expose the animations as OGRE
+/// AnimationStates (the SceneRenderer enables and advances them per frame).
+///
+/// The loader only touches OGRE's process-wide resource managers (materials,
+/// meshes, skeletons, textures), so it has no construction dependencies.
 class ModelLoader {
 public:
-    explicit ModelLoader(OgreContext& context);
+    ModelLoader() = default;
 
     /// Imports an FBX file and registers an Ogre::Mesh named `meshName`.
     /// Returns the mesh resource name, or "" on failure. Repeated calls for the
@@ -36,7 +45,6 @@ private:
     /// Lazily creates the shared default lit material and returns its name.
     std::string ensureDefaultMaterial();
 
-    OgreContext& context_;
     std::unordered_map<std::string, std::string> cache_; // filePath -> meshName
     bool defaultMaterialCreated_{false};
 };

@@ -25,8 +25,8 @@ flows between the three windows and the backend.
         | onConfigure(id) |               +-----------+-----------+     |
         +-----------------+               |   background threads  |     |
                                           | CaptureWorker (camera)|     |
-                                          | TrackingWorker (ORB + |-----+
-                                          |  DetectionFilter)     | OpenCV
+                                          | TrackingWorker (ORB/LK|-----+
+                                          |  + DetectionFilter)   | OpenCV
                                           +-----------------------+
                                           | SceneRenderer (main   | OGRE+Assimp
                                           |  thread, GL)          |
@@ -110,24 +110,40 @@ library with no UI dependencies, so CI can run it headless.
   only the newest (sequence-numbered) one, so consumers never see a backlog
   and the UI never blocks on the camera. Owns device lifecycle: retries while
   no camera is present and reopens on request.
-- `ImageTracker` — registers uploaded images as templates and detects them in
-  a frame (ORB features + Lowe ratio + RANSAC homography + planar IPPE PnP with
-  LM refinement), returning `Detection{imageId, poseInCamera, corners,
-  confidence}`. Robustness measures:
+- `ImageTracker` — registers uploaded images as templates and tracks them
+  per frame with a **detect-then-track** design, returning
+  `Detection{imageId, poseInCamera, corners, confidence, viaOpticalFlow}`.
+  Every registered target is handled independently, so any number of
+  different images track simultaneously in one frame.
+  - *Acquisition*: ORB features + Lowe ratio + RANSAC homography + planar
+    IPPE PnP with LM refinement.
+  - *Tracking*: the acquisition's inlier points are carried frame-to-frame
+    with pyramidal Lucas-Kanade optical flow (forward-backward consistency
+    checked); the pose is re-estimated from the flowed correspondences and
+    RANSAC outliers are pruned from the tracked set so drift can't
+    accumulate. No per-frame re-matching means no matching jitter, and flow
+    keeps tracking through steeper tilt / greater distance than descriptor
+    matching survives. ORB is skipped entirely on frames where every target
+    is flow-tracked.
+  - *Recovery*: when the surviving point set shrinks too far (occlusion,
+    leaving the frame) or the pose turns implausible, the target falls back
+    to ORB re-acquisition automatically.
+  Robustness measures:
   - CLAHE contrast normalisation of templates *and* frames (lighting
     invariance);
   - a second detection pass with a permissive FAST threshold when a frame
     yields few features (dim scenes);
-  - frame features are found on a downscaled copy (≤640 px) and mapped back to
+  - frame features and flow run on a downscaled copy (≤640 px) and map back to
     full-frame coordinates — several-fold cheaper with near-identical results;
   - templates are capped to 640 px so multi-megapixel uploads stay within
     ORB's scale-pyramid range;
   - homographies must map the template to a convex, plausibly sized quad or
     the sighting is rejected (kills the "jumping overlay" misdetections).
   Out-of-plane robustness: ORB descriptors are rotation- and scale-invariant
-  but not perspective-invariant, so detection degrades with tilt; the
+  but not perspective-invariant, so acquisition degrades with tilt; the
   guaranteed envelope (regression-tested) is 30 degrees, and ~40-45 degrees
-  works in practice. The recovered pose (IPPE PnP) reflects the tilt.
+  works in practice — after which optical flow extends the envelope while
+  locked on. The recovered pose (IPPE PnP) reflects the tilt.
   All public methods are mutex-guarded so the UI thread can add/remove targets
   while the tracking thread detects.
 - `DetectionFilter` — temporal smoothing: exponential lerp/slerp of poses and
@@ -137,7 +153,7 @@ library with no UI dependencies, so CI can run it headless.
   any it was too slow for), runs `ImageTracker::detect`, applies the
   `DetectionFilter` and publishes the result for the UI to consume.
 
-### `src/render` — OGRE3D + Assimp (main thread only)
+### `src/render` — OGRE3D + Assimp (main thread only; `ModelLoader` is built as `avb_model` for headless testing)
 
 - `OgreContext` — owns `Ogre::Root`, loads the GL render-system plugin
   programmatically, creates a hidden 1x1 render window (so a GL context exists
@@ -156,10 +172,25 @@ library with no UI dependencies, so CI can run it headless.
   and external image files (resolved next to the model), decoded through
   OpenCV so no OGRE codec plugin is needed. Submeshes without a usable
   material fall back to a shared default. OGRE has no native FBX importer.
-  Also provides the static `validateModelFile()` used by the Upload window.
+  **Animations** come along too: when the file animates, the whole node
+  hierarchy is mirrored into an `Ogre::Skeleton` (one bone per node, node
+  transforms baked into the vertices as bind pose) and every `aiAnimation`
+  becomes a skeletal animation (assimp keys replace a node's local transform;
+  OGRE keyframes are offsets from the binding pose, so keys are rebased).
+  Skinned meshes keep their per-vertex bone weights; meshes without weights
+  bind rigidly (weight 1) to their node's bone, so plain node-transform
+  animations play as well. Only OGRE's CPU-side resource managers are
+  touched, so the import is unit-tested headless (`avb_model_tests`
+  round-trips a generated animated FBX). Also provides the static
+  `validateModelFile()` used by the Upload window.
 - `SceneRenderer` — renders the assigned models (over a transparent background)
   into an off-screen render texture, reads the RGBA result back to the CPU, and
-  composites it over the camera frame. Notes:
+  composites it over the camera frame. Models are kept in per-model instance
+  pools: every `drawModel` call in a frame places its own entity (sharing the
+  cached mesh), so the same model assigned to two simultaneously tracked
+  images renders at both poses. Each instance's first animation (when the
+  mesh has one) is enabled, looping, and advanced by wall-clock time every
+  frame the instance is drawn. Notes:
   - every frame starts by re-binding OGRE's own GL context
     (`OgreContext::makeRenderContextCurrent`): the ImGui windows make their
     SDL contexts current in between, and OGRE only tracks context switches it
@@ -206,7 +237,7 @@ Three threads:
 | --------------- | ----------------------------------------------- | --------------- |
 | main (UI)       | SDL events, ImGui, OGRE render + composite      | ~60 fps         |
 | CaptureWorker   | blocking camera reads, newest-frame slot        | camera (~30fps) |
-| TrackingWorker  | ORB detect + homography/PnP + DetectionFilter   | as fast as able |
+| TrackingWorker  | ORB acquire / LK flow + PnP + DetectionFilter   | as fast as able |
 
 Hand-off points are small and lock-scoped: the newest frame (copied out under
 a mutex), the newest filtered detection list, and the mutex-guarded target set

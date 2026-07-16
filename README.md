@@ -52,12 +52,18 @@ by one shared in-memory data store (see `src/storage`).
    - **Save** writes the pose back into the data store.
 
 3. **Camera window** (`src/ui/CameraWindow`)
-   - Streams the camera feed and tracks the uploaded images (OpenCV ORB
-     features; contrast-normalised so tracking survives lighting changes,
-     temporally smoothed so poses don't jitter or flicker). Targets don't
-     need to face the camera straight on: detection holds up to roughly
-     40 degrees of out-of-plane tilt (and any in-plane rotation), with the
-     estimated pose following the tilt.
+   - Streams the camera feed and tracks the uploaded images with a
+     detect-then-track pipeline: OpenCV ORB feature matching finds a target
+     once, then Lucas-Kanade optical flow carries its points from frame to
+     frame (far steadier than re-matching every frame); when too many points
+     are lost, ORB re-acquires the target automatically. Contrast-normalised
+     so tracking survives lighting changes, temporally smoothed so poses
+     don't jitter or flicker. Targets don't need to face the camera straight
+     on: acquisition holds up to roughly 40 degrees of out-of-plane tilt
+     (and any in-plane rotation), and optical flow keeps tracking through
+     steeper angles and greater distances once locked on. Any number of
+     different images can be tracked at the same time, each with its own
+     models.
    - A dropdown selects the capture device (on Linux, enumerated from
      /dev/video* with driver names); Reconnect reopens it after replugging.
    - Capture and tracking run on background threads, so the feed stays smooth
@@ -65,8 +71,10 @@ by one shared in-memory data store (see `src/storage`).
    - When a tracked image is detected, the FBX models assigned to it are rendered
      (OGRE3D) at their configured pose — with their own materials: colors,
      shininess, vertex colors and diffuse textures (embedded in the FBX or
-     referenced image files next to it). The feed is displayed letterboxed —
-     resizing the window never warps the image or affects tracking.
+     referenced image files next to it). Animated FBX files play their
+     animation (skeletal or plain node animation) while rendered. The feed is
+     displayed letterboxed — resizing the window never warps the image or
+     affects tracking.
 
 ## Default asset library (auto-upload at startup)
 
