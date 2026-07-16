@@ -166,8 +166,8 @@ bool Application::initialize() {
         });
     uploadWindow_ = std::make_unique<UploadWindow>(
         store_,
-        [this](Id assignmentId) {
-            configureWindow_->openAssignment(assignmentId);
+        [this](Id imageId) {
+            configureWindow_->openImage(imageId);
         },
         [this]() { saveSessionToLibrary(); });
     cameraWindow_ = std::make_unique<CameraWindow>(

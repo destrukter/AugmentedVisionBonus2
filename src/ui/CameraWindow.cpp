@@ -220,8 +220,11 @@ void CameraWindow::updateTrackingAndRender() {
                 if (!a) {
                     continue;
                 }
-                // Final pose = detected image pose * configured model offset.
-                const Eigen::Matrix4f pose = d.poseInCamera * a->transform.toMatrix();
+                // Final pose = detected image pose * configured model offset
+                // (the offset itself is origin * transform, see Assignment).
+                const Eigen::Matrix4f pose = d.poseInCamera *
+                                             a->origin.toMatrix() *
+                                             a->transform.toMatrix();
                 renderer_->drawModel(a->modelId, pose);
                 ++rendered;
             }
@@ -237,7 +240,8 @@ void CameraWindow::updateTrackingAndRender() {
         if (!assignments.empty()) {
             const Assignment* a = store_->assignment(assignments.front());
             if (a) {
-                const Eigen::Matrix4f configured = a->transform.toMatrix();
+                const Eigen::Matrix4f configured =
+                    a->origin.toMatrix() * a->transform.toMatrix();
                 Eigen::Matrix4f framing;
                 if (renderer_->previewFramingPose(a->modelId, configured,
                                                   previewYawDeg(), framing)) {

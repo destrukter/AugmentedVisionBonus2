@@ -39,17 +39,24 @@ by one shared in-memory data store (see `src/storage`).
      auto-pairing doesn't recreate them), and files of removed assets are
      moved to `assets/library/removed/`. The next start restores exactly the
      saved session.
-   - For every model assigned to an image, a **Configure** button opens that pairing
-     in the Configure window.
+   - Each picture has one **Configure** button that opens the image (with all
+     its assigned models) in the Configure window.
 
 2. **Configure window** (`src/ui/ConfigureWindow`)
-   - Edit the pose of an FBX model **relative to its image** interactively:
-     the viewport shows the assignment's actual picture and actual model,
-     rendered live, with translate / rotate / scale gizmo handles on top
-     (right-drag orbits the view, wheel zooms). Scale is per-axis (with a
-     uniform handle at the gizmo center).
-   - Numeric fields underneath give exact control over the same values.
-   - **Save** writes the pose back into the data store.
+   - Edits the poses of the models assigned to one image **relative to that
+     image**: the viewport shows the actual picture and **all** of its
+     assigned models, rendered live, with translate / rotate / scale gizmo
+     handles on the selected model (right-drag orbits the view, wheel zooms).
+     Scale is per-axis (with a uniform handle at the gizmo center).
+   - A **Model dropdown** switches which model is being edited; the numeric
+     fields, matrix preview and gizmo follow the selection. Edits are kept
+     per model, so switching never loses unsaved changes (marked `*`).
+   - Numeric fields give exact control over the same values.
+   - **Set origin here** makes the selected model's current position/rotation
+     its new origin: the model stays put, translation and rotation read 0
+     again, and further edits are relative to that origin ("fold back"
+     undoes it). The origin is saved with the pose.
+   - **Save** writes every modified pose back into the data store.
 
 3. **Camera window** (`src/ui/CameraWindow`)
    - Streams the camera feed and tracks the uploaded images with a
@@ -101,9 +108,12 @@ omitted and defaults to the identity pose (translation 0, rotation 0, scale 1):
 ```
 model-file.fbx = image-file.png | t=0,0.5,0 r=0,90,0 s=2
 model-file.fbx = image-file.png | s=1,2,0.5
+model-file.fbx = image-file.png | t=0,0,0 r=0,0,0 s=1 ot=0,0.5,0 or=0,90,0
 ```
 
-`s` takes one uniform value or per-axis `x,y,z`.
+`s` takes one uniform value or per-axis `x,y,z`. `ot`/`or` are the
+translation/rotation of the pose's *origin* (written when "Set origin here"
+was used; the model's full pose is origin x transform).
 
 Poses saved in the Configure window are written back into these columns
 automatically (for library assets), so configured poses **survive restarts**.

@@ -27,12 +27,19 @@ struct ModelAsset {
 /// Links one model to one image with a configurable relative pose.
 ///
 /// One model may appear in many assignments (one per image it is assigned to);
-/// the (modelId, imageId) pair is unique. `transform` defaults to identity.
+/// the (modelId, imageId) pair is unique. Both poses default to identity.
+///
+/// The model's full pose relative to the image is `origin * transform`.
+/// `origin` is a rigid (translation + rotation, scale 1) base pose set by the
+/// Configure window's "Set origin here" action: it folds the current
+/// translation/rotation into the origin so `transform` reads zero while the
+/// model stays put, and further edits are relative to that origin.
 struct Assignment {
     Id id{kInvalidId};
     Id modelId{kInvalidId};
     Id imageId{kInvalidId};
-    Transform transform{};  ///< Pose of the model relative to the image.
+    Transform origin{};     ///< Rigid base pose (see above); usually identity.
+    Transform transform{};  ///< Editable pose of the model, relative to origin.
 };
 
 } // namespace avb

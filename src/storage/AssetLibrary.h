@@ -31,13 +31,15 @@ class DataStore;
 ///
 /// A pair line may carry optional pose columns after a `|`:
 ///
-///     model-file.fbx = image-file.png | t=x,y,z r=x,y,z s=v
+///     model-file.fbx = image-file.png | t=x,y,z r=x,y,z s=v ot=x,y,z or=x,y,z
 ///
 /// `t` is the translation, `r` the rotation in Euler degrees, `s` the uniform
-/// scale. Each may be omitted (in any order); missing components default to
-/// the identity pose (translation 0, rotation 0, scale 1). Poses configured
-/// in the app are written back into these columns via persistAssignment(), so
-/// they survive restarts.
+/// scale; `ot`/`or` are the translation/rotation of the assignment's rigid
+/// *origin* (set via the Configure window's "Set origin here"; the model's
+/// full pose is origin * transform). Each may be omitted (in any order);
+/// missing components default to the identity pose (translation 0, rotation
+/// 0, scale 1). Poses configured in the app are written back into these
+/// columns via persistAssignment(), so they survive restarts.
 ///
 /// A line starting with `!` is an exclusion:
 ///

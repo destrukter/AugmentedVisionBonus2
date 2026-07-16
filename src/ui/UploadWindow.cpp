@@ -240,8 +240,21 @@ void UploadWindow::drawAssignmentSection() {
 
     const ImageAsset* img = store_->image(selectedImage_);
     ImGui::Text("Models on '%s':", img ? img->name.c_str() : "<image>");
+    // One Configure button per picture: the Configure window shows all of the
+    // image's models and switches between them with its own dropdown.
+    const std::vector<Id> assignments =
+        store_->assignmentsForImage(selectedImage_);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(assignments.empty());
+    if (ImGui::Button("Configure")) {
+        onConfigure_(selectedImage_); // hand the image to the Configure window
+    }
+    ImGui::EndDisabled();
+    if (assignments.empty()) {
+        ImGui::TextDisabled("(no models assigned yet)");
+    }
 
-    for (const Id aid : store_->assignmentsForImage(selectedImage_)) {
+    for (const Id aid : assignments) {
         const Assignment* a = store_->assignment(aid);
         if (!a) {
             continue;
@@ -249,10 +262,6 @@ void UploadWindow::drawAssignmentSection() {
         const ModelAsset* model = store_->model(a->modelId);
         ImGui::PushID(static_cast<int>(aid));
         ImGui::BulletText("%s", model ? model->name.c_str() : "<missing>");
-        ImGui::SameLine();
-        if (ImGui::Button("Configure")) {
-            onConfigure_(aid); // hand off to the Configure window
-        }
         ImGui::SameLine();
         if (ImGui::Button("Revert")) {
             store_->unassign(aid);

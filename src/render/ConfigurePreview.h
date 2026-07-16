@@ -23,12 +23,12 @@ class OgreContext;
 class ModelLoader;
 class DataStore;
 
-/// Renders the Configure window's viewport content - the assignment's actual
-/// image as a textured plane (width 1, matching the tracker's convention)
-/// plus its actual FBX model at the working transform - through OGRE into an
-/// off-screen target. The window draws the result as the background of the
-/// gizmo viewport, so the user manipulates the real model over the real
-/// picture instead of proxy shapes.
+/// Renders the Configure window's viewport content - the image as a textured
+/// plane (width 1, matching the tracker's convention) plus every model
+/// assigned to it at its working pose - through OGRE into an off-screen
+/// target. The window draws the result as the background of the gizmo
+/// viewport, so the user manipulates the real models over the real picture
+/// instead of proxy shapes.
 ///
 /// Shares SceneRenderer's scene manager; the two renders are isolated with
 /// visibility masks (kConfigPreviewVisibilityMask vs kMainSceneVisibilityMask)
@@ -38,6 +38,13 @@ class DataStore;
 /// any ImGui window's GL pass; it re-binds OGRE's GL context itself.
 class ConfigurePreview {
 public:
+    /// One model to draw, at a full pose (origin * working transform)
+    /// relative to the image plane.
+    struct ModelPose {
+        Id modelId{kInvalidId};
+        Eigen::Matrix4f pose{Eigen::Matrix4f::Identity()};
+    };
+
     ConfigurePreview(std::shared_ptr<OgreContext> context,
                      std::shared_ptr<ModelLoader> loader,
                      std::shared_ptr<DataStore> store);
@@ -46,13 +53,14 @@ public:
     ConfigurePreview(const ConfigurePreview&) = delete;
     ConfigurePreview& operator=(const ConfigurePreview&) = delete;
 
-    /// Renders `assignmentId`'s image + model (posed by `workingPose`) as seen
-    /// from `eye` looking at the image-plane origin (up = +Y), with vertical
-    /// FOV `fovYDeg`, into a `width` x `height` target. The caller must use
-    /// the same eye/FOV/aspect for its gizmo matrices so handles line up with
-    /// the rendered pixels. Returns false (rendering nothing) when the
-    /// assignment, decoded image pixels or model mesh are unavailable.
-    bool render(Id assignmentId, const Eigen::Matrix4f& workingPose,
+    /// Renders `imageId`'s picture plane plus all `models` as seen from `eye`
+    /// looking at the image-plane origin (up = +Y), with vertical FOV
+    /// `fovYDeg`, into a `width` x `height` target. The caller must use the
+    /// same eye/FOV/aspect for its gizmo matrices so handles line up with the
+    /// rendered pixels. Models whose mesh cannot be loaded are skipped.
+    /// Returns false (rendering nothing) when the image pixels or the render
+    /// target are unavailable.
+    bool render(Id imageId, const std::vector<ModelPose>& models,
                 const Eigen::Vector3f& eye, float fovYDeg, int width,
                 int height);
 
@@ -79,7 +87,6 @@ private:
     std::string rttName_;
 
     Id currentImageId_{kInvalidId};
-    Id currentModelId_{kInvalidId};
     std::unordered_map<Id, Ogre::SceneNode*> modelNodes_;
 
     cv::Mat output_;                        // RGBA result

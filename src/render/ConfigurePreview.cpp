@@ -218,15 +218,10 @@ Ogre::SceneNode* ConfigurePreview::ensureModelNode(Id modelId) {
     return node;
 }
 
-bool ConfigurePreview::render(Id assignmentId,
-                              const Eigen::Matrix4f& workingPose,
+bool ConfigurePreview::render(Id imageId, const std::vector<ModelPose>& models,
                               const Eigen::Vector3f& eye, float fovYDeg,
                               int width, int height) {
     if (width < 16 || height < 16) {
-        return false;
-    }
-    const Assignment* assignment = store_->assignment(assignmentId);
-    if (!assignment) {
         return false;
     }
 
@@ -235,24 +230,23 @@ bool ConfigurePreview::render(Id assignmentId,
     context_->makeRenderContextCurrent();
 
     if (!ensureInitialized() || !ensureTarget(width, height) ||
-        !ensureImagePlane(assignment->imageId)) {
-        return false;
-    }
-    Ogre::SceneNode* modelNode = ensureModelNode(assignment->modelId);
-    if (!modelNode) {
+        !ensureImagePlane(imageId)) {
         return false;
     }
 
-    // Show only the active assignment's model.
-    if (currentModelId_ != assignment->modelId) {
-        if (const auto it = modelNodes_.find(currentModelId_);
-            it != modelNodes_.end()) {
-            it->second->setVisible(false);
-        }
-        currentModelId_ = assignment->modelId;
+    // Show exactly the requested models: everything else (models of other
+    // images, models unassigned since the last render) is hidden.
+    for (auto& [id, node] : modelNodes_) {
+        node->setVisible(false);
     }
-    applyPose(modelNode, workingPose);
-    modelNode->setVisible(true);
+    for (const ModelPose& m : models) {
+        Ogre::SceneNode* modelNode = ensureModelNode(m.modelId);
+        if (!modelNode) {
+            continue; // model failed to load; still render the others
+        }
+        applyPose(modelNode, m.pose);
+        modelNode->setVisible(true);
+    }
 
     cameraNode_->setPosition(eye.x(), eye.y(), eye.z());
     cameraNode_->lookAt(Ogre::Vector3::ZERO, Ogre::Node::TS_WORLD);

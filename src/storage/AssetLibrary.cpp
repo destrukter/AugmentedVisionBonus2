@@ -122,12 +122,21 @@ bool parseFloats(const std::string& values, float* out, int count) {
     return parsed == count;
 }
 
-/// Parses the optional pose columns (`t=x,y,z r=x,y,z s=v`, any subset, any
-/// order). Malformed tokens are reported and fall back to that component's
-/// identity default.
-Transform parsePose(const std::string& spec, int lineNo,
-                    std::vector<std::string>& warnings) {
-    Transform t;
+/// A parsed pose column set: the editable transform plus the rigid origin it
+/// is relative to (see Assignment).
+struct PoseSpec {
+    Transform origin;
+    Transform transform;
+};
+
+/// Parses the optional pose columns (`t=x,y,z r=x,y,z s=v ot=x,y,z or=x,y,z`,
+/// any subset, any order; `ot`/`or` are the origin's translation/rotation).
+/// Malformed tokens are reported and fall back to that component's identity
+/// default.
+PoseSpec parsePose(const std::string& spec, int lineNo,
+                   std::vector<std::string>& warnings) {
+    PoseSpec pose;
+    Transform& t = pose.transform;
     std::istringstream in(spec);
     std::string token;
     while (in >> token) {
@@ -136,18 +145,25 @@ Transform parsePose(const std::string& spec, int lineNo,
                                ": pose token '" + token + "' " + reason +
                                ", using the default");
         };
-        if (token.size() < 3 || token[1] != '=') {
-            warn("is not of the form t=x,y,z / r=x,y,z / s=x,y,z (or s=v)");
+        const auto eq = token.find('=');
+        if (eq == std::string::npos || eq == 0 || eq + 1 >= token.size()) {
+            warn("is not of the form t=x,y,z / r=x,y,z / s=x,y,z (or s=v) / "
+                 "ot=x,y,z / or=x,y,z");
             continue;
         }
-        const char key = static_cast<char>(std::tolower(token[0]));
-        const std::string values = token.substr(2);
+        const std::string key = toLower(token.substr(0, eq));
+        const std::string values = token.substr(eq + 1);
         float nums[3] = {0.0f, 0.0f, 0.0f};
-        if (key == 't' && parseFloats(values, nums, 3)) {
+        if (key == "t" && parseFloats(values, nums, 3)) {
             t.translation = Eigen::Vector3f(nums[0], nums[1], nums[2]);
-        } else if (key == 'r' && parseFloats(values, nums, 3)) {
+        } else if (key == "r" && parseFloats(values, nums, 3)) {
             t.rotationEulerDeg = Eigen::Vector3f(nums[0], nums[1], nums[2]);
-        } else if (key == 's') {
+        } else if (key == "ot" && parseFloats(values, nums, 3)) {
+            pose.origin.translation = Eigen::Vector3f(nums[0], nums[1], nums[2]);
+        } else if (key == "or" && parseFloats(values, nums, 3)) {
+            pose.origin.rotationEulerDeg =
+                Eigen::Vector3f(nums[0], nums[1], nums[2]);
+        } else if (key == "s") {
             // Either three per-axis values or one uniform value.
             bool ok = parseFloats(values, nums, 3);
             if (!ok && parseFloats(values, nums, 1)) {
@@ -165,7 +181,7 @@ Transform parsePose(const std::string& spec, int lineNo,
             warn("could not be parsed");
         }
     }
-    return t;
+    return pose;
 }
 
 std::string formatFloat(float v) {
@@ -179,30 +195,38 @@ std::string pairKey(const std::string& modelName, const std::string& imageName) 
     return toLower(modelName) + "\n" + toLower(imageName);
 }
 
-/// Formats the pose columns written after `|`; empty for the identity pose
-/// (a bare pair line already means "identity"). A uniform scale is written as
-/// a single value, per-axis scales as x,y,z.
-std::string formatPose(const Transform& t) {
-    if (t.isIdentity()) {
+std::string formatVec3(const Eigen::Vector3f& v) {
+    return formatFloat(v.x()) + "," + formatFloat(v.y()) + "," +
+           formatFloat(v.z());
+}
+
+/// Formats the pose columns written after `|`; empty when both the transform
+/// and origin are identity (a bare pair line already means "identity"). A
+/// uniform scale is written as a single value, per-axis scales as x,y,z. The
+/// origin's translation/rotation are written as ot=/or= only when set.
+std::string formatPose(const Transform& origin, const Transform& t) {
+    if (t.isIdentity() && origin.isIdentity()) {
         return "";
     }
     std::string scale = formatFloat(t.scale.x());
     if (t.scale.x() != t.scale.y() || t.scale.y() != t.scale.z()) {
         scale += "," + formatFloat(t.scale.y()) + "," + formatFloat(t.scale.z());
     }
-    return "t=" + formatFloat(t.translation.x()) + "," +
-           formatFloat(t.translation.y()) + "," +
-           formatFloat(t.translation.z()) + " r=" +
-           formatFloat(t.rotationEulerDeg.x()) + "," +
-           formatFloat(t.rotationEulerDeg.y()) + "," +
-           formatFloat(t.rotationEulerDeg.z()) + " s=" + scale;
+    std::string pose = "t=" + formatVec3(t.translation) + " r=" +
+                       formatVec3(t.rotationEulerDeg) + " s=" + scale;
+    if (!origin.isIdentity()) {
+        pose += " ot=" + formatVec3(origin.translation) + " or=" +
+                formatVec3(origin.rotationEulerDeg);
+    }
+    return pose;
 }
 
 /// One complete cfg pair line: `model = image [| pose]`.
 std::string formatPairLine(const std::string& modelName,
-                           const std::string& imageName, const Transform& t) {
+                           const std::string& imageName, const Transform& origin,
+                           const Transform& t) {
     std::string line = modelName + " = " + imageName;
-    if (const std::string pose = formatPose(t); !pose.empty()) {
+    if (const std::string pose = formatPose(origin, t); !pose.empty()) {
         line += " | " + pose;
     }
     return line;
@@ -321,8 +345,10 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
                 ++report.assignmentsCreated;
             }
             if (!poseSpec.empty()) {
-                store_->setTransform(
-                    assignmentId, parsePose(poseSpec, lineNo, report.warnings));
+                const PoseSpec pose =
+                    parsePose(poseSpec, lineNo, report.warnings);
+                store_->setTransform(assignmentId, pose.transform);
+                store_->setOrigin(assignmentId, pose.origin);
             }
         }
     }
@@ -371,8 +397,8 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
         return false; // not library assets: names would not resolve on restart
     }
 
-    const std::string newLine =
-        formatPairLine(model->name, image->name, assignment->transform);
+    const std::string newLine = formatPairLine(
+        model->name, image->name, assignment->origin, assignment->transform);
 
     // Rewrite only the line(s) for this pair; keep everything else - other
     // pairs, comments, blank lines - byte-for-byte. Duplicate lines for the
@@ -553,7 +579,7 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
             continue;
         }
         pairLines[pairKey(model->name, image->name)] =
-            formatPairLine(model->name, image->name, a->transform);
+            formatPairLine(model->name, image->name, a->origin, a->transform);
     }
     for (const Id modelId : store_->modelIds()) {
         const ModelAsset* model = store_->model(modelId);

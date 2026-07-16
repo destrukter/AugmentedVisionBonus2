@@ -16,12 +16,13 @@ class DataStore;
 ///   * Upload images and FBX models (file pickers).
 ///   * Assign a model to an image; one model may be assigned to many images.
 ///   * Revert (unassign) and re-assign differently.
-///   * Offer a "Configure" button per (model, image) assignment that hands the
-///     assignment off to the Configure window via the onConfigure callback.
+///   * Offer one "Configure" button per picture that hands the image off to
+///     the Configure window (where all its assigned models are edited) via
+///     the onConfigure callback.
 class UploadWindow : public Window {
 public:
-    /// Invoked when the user clicks "Configure" on an assignment.
-    using ConfigureCallback = std::function<void(Id assignmentId)>;
+    /// Invoked when the user clicks "Configure" on an image.
+    using ConfigureCallback = std::function<void(Id imageId)>;
     /// Invoked when the user clicks "Save session to library".
     using SaveSessionCallback = std::function<void()>;
 
