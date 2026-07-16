@@ -220,6 +220,116 @@ static void test_add_remove_clear_targets() {
     CHECK(tracker.detect(frameBoth).empty());
 }
 
+// Detect-once-then-track: the first sighting comes from ORB matching, every
+// following frame of a smoothly moving marker must be carried by optical flow
+// (viaOpticalFlow) while still localizing the marker correctly.
+static void test_optical_flow_tracks_moving_marker() {
+    ImageTracker tracker;
+    const cv::Mat marker = makeNoiseMarker(160, 31);
+    tracker.addTarget(20, marker);
+
+    // First frame: acquisition, necessarily via feature matching.
+    std::vector<Detection> d = tracker.detect(makeFrameWithMarker(marker, 400, 60, 100));
+    CHECK(d.size() == 1);
+    if (d.empty()) {
+        return;
+    }
+    CHECK(!d[0].viaOpticalFlow);
+
+    // Marker glides right a few px per frame; every frame must stay tracked,
+    // via flow, with corners following the motion.
+    for (int step = 1; step <= 15; ++step) {
+        const int x = 60 + 4 * step;
+        d = tracker.detect(makeFrameWithMarker(marker, 400, x, 100));
+        CHECK(d.size() == 1);
+        if (d.empty()) {
+            return;
+        }
+        CHECK(d[0].imageId == 20);
+        CHECK(d[0].viaOpticalFlow);
+        CHECK(std::abs(d[0].corners[0].x - static_cast<float>(x)) < 6.0f);
+        CHECK(std::abs(d[0].corners[0].y - 100.0f) < 6.0f);
+    }
+}
+
+// When the marker vanishes (occlusion / leaving the view), flow points die and
+// the tracker must report nothing - and then re-acquire via ORB the moment the
+// marker is visible again.
+static void test_reacquires_after_marker_lost() {
+    ImageTracker tracker;
+    const cv::Mat marker = makeNoiseMarker(160, 33);
+    tracker.addTarget(21, marker);
+
+    CHECK(tracker.detect(makeFrameWithMarker(marker, 400, 100, 100)).size() == 1);
+    CHECK(tracker.detect(makeFrameWithMarker(marker, 400, 104, 100)).size() == 1);
+
+    // Marker gone: a featureless frame kills the flow points (no detection).
+    const cv::Mat empty(400, 400, CV_8UC1, cv::Scalar(128));
+    CHECK(tracker.detect(empty).empty());
+    CHECK(tracker.detect(empty).empty());
+
+    // Marker returns at a new position: must be re-acquired by ORB matching.
+    const std::vector<Detection> back =
+        tracker.detect(makeFrameWithMarker(marker, 400, 180, 60));
+    CHECK(back.size() == 1);
+    if (back.empty()) {
+        return;
+    }
+    CHECK(!back[0].viaOpticalFlow);
+    CHECK(std::abs(back[0].corners[0].x - 180.0f) < 6.0f);
+    CHECK(std::abs(back[0].corners[0].y - 60.0f) < 6.0f);
+
+    // ...and tracked by flow again from the next frame on.
+    const std::vector<Detection> flowing =
+        tracker.detect(makeFrameWithMarker(marker, 400, 184, 60));
+    CHECK(flowing.size() == 1);
+    if (!flowing.empty()) {
+        CHECK(flowing[0].viaOpticalFlow);
+    }
+}
+
+// Two different registered images moving independently in the same feed must
+// both stay tracked, each under its own id, frame after frame.
+static void test_tracks_two_markers_simultaneously() {
+    ImageTracker tracker;
+    const cv::Mat markerA = makeNoiseMarker(120, 41);
+    const cv::Mat markerB = makeNoiseMarker(120, 42);
+    tracker.addTarget(31, markerA);
+    tracker.addTarget(32, markerB);
+
+    for (int step = 0; step <= 12; ++step) {
+        cv::Mat frame(420, 420, CV_8UC1, cv::Scalar(128));
+        const int ax = 20 + 3 * step;         // A drifts right
+        const int by = 240 - 3 * step;        // B drifts up
+        markerA.copyTo(frame(cv::Rect(ax, 30, markerA.cols, markerA.rows)));
+        markerB.copyTo(frame(cv::Rect(260, by, markerB.cols, markerB.rows)));
+
+        const std::vector<Detection> d = tracker.detect(frame);
+        CHECK(d.size() == 2);
+
+        const auto a = std::find_if(d.begin(), d.end(), [](const Detection& x) {
+            return x.imageId == 31;
+        });
+        const auto b = std::find_if(d.begin(), d.end(), [](const Detection& x) {
+            return x.imageId == 32;
+        });
+        CHECK(a != d.end());
+        CHECK(b != d.end());
+        if (a == d.end() || b == d.end()) {
+            return;
+        }
+        CHECK(std::abs(a->corners[0].x - static_cast<float>(ax)) < 6.0f);
+        CHECK(std::abs(a->corners[0].y - 30.0f) < 6.0f);
+        CHECK(std::abs(b->corners[0].x - 260.0f) < 6.0f);
+        CHECK(std::abs(b->corners[0].y - static_cast<float>(by)) < 6.0f);
+        if (step > 0) {
+            // After the acquisition frame both targets ride on optical flow.
+            CHECK(a->viaOpticalFlow);
+            CHECK(b->viaOpticalFlow);
+        }
+    }
+}
+
 void run_imagetracker_tests() {
     test_detects_synthetic_marker();
     test_ignores_featureless_target();
@@ -228,4 +338,7 @@ void run_imagetracker_tests() {
     test_downscaled_detection_keeps_fullres_coordinates();
     test_feature_count_reports_trackability();
     test_add_remove_clear_targets();
+    test_optical_flow_tracks_moving_marker();
+    test_reacquires_after_marker_lost();
+    test_tracks_two_markers_simultaneously();
 }

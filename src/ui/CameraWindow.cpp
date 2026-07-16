@@ -47,9 +47,9 @@ void drawTrackingOutline(cv::Mat& frame, const Detection& d) {
     cv::polylines(frame, pts, /*isClosed=*/true, green, 2, cv::LINE_AA);
 
     char label[64];
-    std::snprintf(label, sizeof(label), "#%llu (%.0f%%)",
+    std::snprintf(label, sizeof(label), "#%llu (%.0f%% %s)",
                   static_cast<unsigned long long>(d.imageId),
-                  d.confidence * 100.0f);
+                  d.confidence * 100.0f, d.viaOpticalFlow ? "flow" : "orb");
     cv::putText(frame, label, pts.front() + cv::Point(0, -6),
                 cv::FONT_HERSHEY_SIMPLEX, 0.5, green, 1, cv::LINE_AA);
 }

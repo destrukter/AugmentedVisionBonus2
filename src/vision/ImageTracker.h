@@ -23,6 +23,9 @@ struct Detection {
     /// assignment's Transform to place its model.
     Eigen::Matrix4f poseInCamera{Eigen::Matrix4f::Identity()};
     float confidence{0.0f};
+    /// True when the pose came from frame-to-frame optical flow, false when it
+    /// came from a fresh ORB feature-match acquisition.
+    bool viaOpticalFlow{false};
     /// The template's boundary projected into frame pixel coordinates (the four
     /// corners, clockwise from the top-left). Useful for drawing a debug outline
     /// around the tracked target.
@@ -30,7 +33,22 @@ struct Detection {
 };
 
 /// Detects which uploaded images are visible in the camera feed and estimates
-/// their pose, using ORB feature matching + homography + planar PnP.
+/// their pose. All registered targets are searched independently, so any
+/// number of different images can be tracked simultaneously in one frame.
+///
+/// Two-phase detect-then-track design:
+///  * Acquisition: ORB feature matching + homography + planar PnP finds a
+///    target that is not currently tracked.
+///  * Tracking: once acquired, the matched feature points are carried from
+///    frame to frame with pyramidal Lucas-Kanade optical flow (with a
+///    forward-backward consistency check), and the pose is re-estimated from
+///    the flowed correspondences. Optical flow is far more stable than
+///    per-frame matching - no jitter from re-matched features - and keeps
+///    tracking through steeper viewing angles and greater distances than
+///    descriptor matching survives.
+///  * Recovery: when too many flow points are lost (occlusion, motion blur,
+///    target leaving the frame) or the tracked pose turns implausible, the
+///    target drops back to ORB acquisition automatically.
 ///
 /// Robustness measures:
 ///  * CLAHE contrast normalisation on both templates and frames, so matching
@@ -38,7 +56,8 @@ struct Detection {
 ///  * If a frame yields few features (low light, low contrast), detection is
 ///    retried once with a more permissive FAST threshold.
 ///  * Frames are downscaled for feature detection (poses stay in full-frame
-///    coordinates), cutting per-frame cost several-fold.
+///    coordinates), cutting per-frame cost several-fold. ORB is skipped
+///    entirely on frames where every target is being tracked by optical flow.
 ///  * The homography is sanity-checked (convex, plausibly sized quad) before a
 ///    pose is accepted, rejecting degenerate fits that made the overlay jump.
 ///
@@ -72,13 +91,21 @@ public:
     static int countTrackableFeatures(const cv::Mat& image);
 
 private:
-    struct Target;                  // feature data per registered image
+    struct Target;                  // feature + flow-tracking data per image
+
+    /// Advances `target`'s flow points from `prevGray` to `gray` (both at
+    /// detection scale) with pyramidal LK + a forward-backward consistency
+    /// check, pruning lost points. Returns false when too few points survive
+    /// to keep tracking (the caller then falls back to ORB acquisition).
+    bool advanceFlow(const cv::Mat& prevGray, const cv::Mat& gray, Target& target);
+
     std::vector<Target> targets_;   // pimpl-style to keep the header light
     cv::Mat cameraMatrix_;
     cv::Mat distCoeffs_;
 
     cv::Ptr<cv::Feature2D> orb_;    // shared detector (guarded by mutex_)
     cv::Ptr<cv::CLAHE> clahe_;      // contrast normalisation (guarded by mutex_)
+    cv::Mat prevGray_;              // previous detection-scale frame, for optical flow
     mutable std::mutex mutex_;
 };
 
