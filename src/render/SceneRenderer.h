@@ -12,6 +12,7 @@
 
 namespace Ogre {
 class Camera;
+class Entity;
 class SceneNode;
 class Light;
 class RenderTexture;
@@ -46,8 +47,11 @@ public:
     bool initialize(int width, int height);
 
     void beginFrame(const cv::Mat& cameraFrame);
-    /// Places the model for `modelId` at `pose` (a 4x4 camera-space matrix) and
-    /// makes it visible. Lazily loads/instantiates the mesh on first use.
+    /// Places an instance of the model for `modelId` at `pose` (a 4x4
+    /// camera-space matrix) and makes it visible. Lazily loads/instantiates
+    /// the mesh on first use. May be called several times per frame for the
+    /// same model (e.g. the same model assigned to two tracked images); each
+    /// call places a separate instance.
     void drawModel(Id modelId, const Eigen::Matrix4f& pose);
     void endFrame();
 
@@ -69,7 +73,25 @@ public:
     int height() const { return height_; }
 
 private:
-    Ogre::SceneNode* ensureNode(Id modelId);
+    /// One placed copy of a model. Several instances of the same model exist
+    /// when it is drawn more than once per frame (same model assigned to
+    /// multiple tracked images).
+    struct ModelInstance {
+        Ogre::SceneNode* node{nullptr};
+        Ogre::Entity* entity{nullptr};
+    };
+    struct InstancePool {
+        std::vector<ModelInstance> instances;
+        std::size_t used{0};  // instances handed out since beginFrame()
+    };
+
+    /// Returns the next unused instance of `modelId` for this frame, creating
+    /// node+entity (sharing the cached mesh) when the pool is exhausted.
+    /// Returns nullptr when the model cannot be loaded.
+    ModelInstance* acquireInstance(Id modelId);
+    /// Ensures at least one instance of `modelId` exists (without consuming it
+    /// from this frame's pool) - used for bounding-box queries.
+    ModelInstance* ensureFirstInstance(Id modelId);
     /// (Re)creates the off-screen render target at the given size. Called from
     /// initialize() and again whenever the camera frame size changes.
     bool createRenderTarget(int width, int height);
@@ -86,8 +108,8 @@ private:
     Ogre::RenderTexture* renderTarget_{nullptr};
     std::string rttName_;
 
-    // modelId -> scene node (created on demand).
-    std::unordered_map<Id, Ogre::SceneNode*> nodes_;
+    // modelId -> instance pool (instances created on demand).
+    std::unordered_map<Id, InstancePool> pools_;
 
     cv::Mat cameraFrame_;            // latest BGR frame (may be empty)
     cv::Mat composited_;             // RGBA output

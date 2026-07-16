@@ -140,15 +140,19 @@ void SceneRenderer::beginFrame(const cv::Mat& cameraFrame) {
         (cameraFrame.cols != width_ || cameraFrame.rows != height_)) {
         createRenderTarget(cameraFrame.cols, cameraFrame.rows);
     }
-    for (auto& [id, node] : nodes_) {
-        node->setVisible(false);
+    for (auto& [id, pool] : pools_) {
+        for (ModelInstance& instance : pool.instances) {
+            instance.node->setVisible(false);
+        }
+        pool.used = 0;
     }
     visibleModels_ = 0;
 }
 
-Ogre::SceneNode* SceneRenderer::ensureNode(Id modelId) {
-    if (const auto it = nodes_.find(modelId); it != nodes_.end()) {
-        return it->second;
+SceneRenderer::ModelInstance* SceneRenderer::ensureFirstInstance(Id modelId) {
+    InstancePool& pool = pools_[modelId];
+    if (!pool.instances.empty()) {
+        return &pool.instances.front();
     }
     const ModelAsset* model = store_->model(modelId);
     if (!model) {
@@ -160,19 +164,47 @@ Ogre::SceneNode* SceneRenderer::ensureNode(Id modelId) {
         return nullptr;
     }
     Ogre::SceneManager* sm = context_->sceneManager();
-    Ogre::Entity* entity = sm->createEntity("avb/ent/" + std::to_string(modelId), mesh);
-    entity->setVisibilityFlags(kMainSceneVisibilityMask);
-    Ogre::SceneNode* node = worldRoot_->createChildSceneNode();
-    node->attachObject(entity);
-    nodes_.emplace(modelId, node);
-    return node;
+    ModelInstance instance;
+    instance.entity =
+        sm->createEntity("avb/ent/" + std::to_string(modelId) + "/0", mesh);
+    instance.entity->setVisibilityFlags(kMainSceneVisibilityMask);
+    instance.node = worldRoot_->createChildSceneNode();
+    instance.node->attachObject(instance.entity);
+    pool.instances.push_back(instance);
+    return &pool.instances.front();
+}
+
+SceneRenderer::ModelInstance* SceneRenderer::acquireInstance(Id modelId) {
+    // Creates the pool (and validates the model loads) via the first instance.
+    if (!ensureFirstInstance(modelId)) {
+        return nullptr;
+    }
+    InstancePool& pool = pools_[modelId];
+    if (pool.used < pool.instances.size()) {
+        return &pool.instances[pool.used++];
+    }
+    // Same model drawn again this frame (e.g. assigned to a second tracked
+    // image): clone another entity of the shared mesh.
+    Ogre::SceneManager* sm = context_->sceneManager();
+    ModelInstance instance;
+    instance.entity = sm->createEntity(
+        "avb/ent/" + std::to_string(modelId) + "/" +
+            std::to_string(pool.instances.size()),
+        pool.instances.front().entity->getMesh());
+    instance.entity->setVisibilityFlags(kMainSceneVisibilityMask);
+    instance.node = worldRoot_->createChildSceneNode();
+    instance.node->attachObject(instance.entity);
+    pool.instances.push_back(instance);
+    ++pool.used;
+    return &pool.instances.back();
 }
 
 void SceneRenderer::drawModel(Id modelId, const Eigen::Matrix4f& pose) {
-    Ogre::SceneNode* node = ensureNode(modelId);
-    if (!node) {
+    ModelInstance* instance = acquireInstance(modelId);
+    if (!instance) {
         return;
     }
+    Ogre::SceneNode* node = instance->node;
     // Decompose the 4x4 pose into translation, rotation and per-axis scale.
     const Eigen::Vector3f t = pose.block<3, 1>(0, 3);
     Eigen::Matrix3f rs = pose.block<3, 3>(0, 0);
@@ -195,11 +227,11 @@ void SceneRenderer::drawModel(Id modelId, const Eigen::Matrix4f& pose) {
 bool SceneRenderer::previewFramingPose(Id modelId,
                                        const Eigen::Matrix4f& configured,
                                        float yawDeg, Eigen::Matrix4f& outPose) {
-    Ogre::SceneNode* node = ensureNode(modelId);
-    if (!node || node->numAttachedObjects() == 0) {
+    ModelInstance* instance = ensureFirstInstance(modelId);
+    if (!instance || !instance->entity) {
         return false;
     }
-    const Ogre::AxisAlignedBox& box = node->getAttachedObject(0)->getBoundingBox();
+    const Ogre::AxisAlignedBox& box = instance->entity->getBoundingBox();
     if (box.isNull() || box.isInfinite()) {
         return false;
     }
