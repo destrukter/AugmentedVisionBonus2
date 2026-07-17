@@ -106,11 +106,12 @@ private:
     int canvasW_{0};
     int canvasH_{0};
     bool previewValid_{false};
-    /// Matrix the gizmo manipulates (the selected model's full pose,
-    /// origin * transform). Kept across the frames of one drag (and only
-    /// rebuilt while the gizmo is idle) because rebuilding it from the
-    /// decomposed Euler angles mid-drag makes the handles snap at
-    /// representation boundaries.
+    /// Matrix the gizmo manipulates: the selected model's editable transform,
+    /// expressed in the assignment's origin frame (the origin is folded into
+    /// the view matrix handed to ImGuizmo, so the handles still render on the
+    /// model). Kept across the frames of one drag (and only rebuilt while the
+    /// gizmo is idle) because rebuilding it from the decomposed Euler angles
+    /// mid-drag makes the handles snap at representation boundaries.
     Eigen::Matrix4f gizmoMatrix_{Eigen::Matrix4f::Identity()};
 };
 

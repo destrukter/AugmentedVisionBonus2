@@ -55,7 +55,10 @@ by one shared in-memory data store (see `src/storage`).
    - **Set origin here** makes the selected model's current position/rotation
      its new origin: the model stays put, translation and rotation read 0
      again, and further edits are relative to that origin ("fold back"
-     undoes it). The origin is saved with the pose.
+     undoes it). The origin is saved with the pose. While an origin is set,
+     the viewport marks it with an axes triad, and the gizmo's translate
+     arrows align with the origin's axes (so each arrow drives exactly one
+     translation field).
    - **Save** writes every modified pose back into the data store.
 
 3. **Camera window** (`src/ui/CameraWindow`)
