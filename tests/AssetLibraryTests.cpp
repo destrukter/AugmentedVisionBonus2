@@ -120,36 +120,30 @@ static void test_explicit_pairs_from_cfg() {
     CHECK(store->findAssignment(model, image).has_value());
 }
 
-static void test_auto_pairs_by_stem() {
+static void test_no_automatic_name_based_pairing() {
     TempLibrary lib;
-    lib.addImage("Dragon.png");   // stem match is case-insensitive
-    lib.addImage("other.png");
+    // A model and images sharing its base name: without a cfg line they must
+    // stay unassigned (automatic stem pairing is intentionally not a thing).
+    lib.addImage("Dragon.png");
+    lib.addImage("dragon.jpg");
     lib.addModel("dragon.fbx");
 
     auto store = std::make_shared<DataStore>();
     AssetLibrary loader(store, stubValidator);
     const AssetLibrary::Report report = loader.load(lib.root.string());
 
-    CHECK(report.assignmentsCreated == 1);
-    const Id model = modelByName(*store, "dragon.fbx");
-    const Id image = imageByName(*store, "Dragon.png");
-    CHECK(store->findAssignment(model, image).has_value());
-    CHECK(!store->findAssignment(model, imageByName(*store, "other.png")));
-}
+    CHECK(report.warnings.empty());
+    CHECK(report.assignmentsCreated == 0);
+    CHECK(store->assignmentIds().empty());
 
-static void test_cfg_and_stem_pair_do_not_duplicate() {
-    TempLibrary lib;
-    lib.addImage("dragon.png");
-    lib.addModel("dragon.fbx");
-    lib.writeCfg("dragon.fbx = dragon.png\n");
-
-    auto store = std::make_shared<DataStore>();
-    AssetLibrary loader(store, stubValidator);
-    const AssetLibrary::Report report = loader.load(lib.root.string());
-
-    // The cfg pair and the stem auto-pair resolve to the same assignment.
-    CHECK(report.assignmentsCreated == 1);
-    CHECK(store->assignmentIds().size() == 1);
+    // Legacy '!' exclusion lines (from when auto-pairing existed) are
+    // tolerated silently.
+    lib.writeCfg("! dragon.fbx = Dragon.png\n");
+    auto store2 = std::make_shared<DataStore>();
+    AssetLibrary loader2(store2, stubValidator);
+    const AssetLibrary::Report report2 = loader2.load(lib.root.string());
+    CHECK(report2.warnings.empty());
+    CHECK(store2->assignmentIds().empty());
 }
 
 static void test_cfg_pose_columns_are_applied() {
@@ -236,9 +230,9 @@ static void test_persisted_pose_survives_reload() {
     TempLibrary lib;
     lib.addImage("dragon.png");
     lib.addModel("dragon.fbx");
-    lib.writeCfg("# user comment stays intact\n");
+    lib.writeCfg("# user comment stays intact\ndragon.fbx = dragon.png\n");
 
-    // First run: auto-paired by stem, user configures + saves a pose.
+    // First run: paired via the cfg, user configures + saves a pose.
     auto store = std::make_shared<DataStore>();
     AssetLibrary loader(store, stubValidator);
     loader.load(lib.root.string());
@@ -278,6 +272,7 @@ static void test_persisted_origin_survives_reload() {
     TempLibrary lib;
     lib.addImage("dragon.png");
     lib.addModel("dragon.fbx");
+    lib.writeCfg("dragon.fbx = dragon.png\n");
 
     auto store = std::make_shared<DataStore>();
     AssetLibrary loader(store, stubValidator);
@@ -385,12 +380,13 @@ static void test_persist_identity_writes_bare_pair() {
     lib.addImage("dragon.png");
     lib.addModel("dragon.fbx");
 
+    // Assigned in the app (no cfg line yet); persisting appends one.
     auto store = std::make_shared<DataStore>();
     AssetLibrary loader(store, stubValidator);
     loader.load(lib.root.string());
-    const auto aid = store->findAssignment(modelByName(*store, "dragon.fbx"),
-                                           imageByName(*store, "dragon.png"));
-    CHECK(loader.persistAssignment(lib.root.string(), *aid));
+    const Id aid = store->assign(modelByName(*store, "dragon.fbx"),
+                                 imageByName(*store, "dragon.png"));
+    CHECK(loader.persistAssignment(lib.root.string(), aid));
 
     std::ifstream cfg((lib.root / "assignments.cfg").string());
     std::string contents((std::istreambuf_iterator<char>(cfg)),
@@ -466,12 +462,15 @@ static void test_save_session_copies_external_files_and_persists() {
     fs::remove_all(ext);
 }
 
-static void test_save_session_drops_reverted_assignments_and_excludes() {
+static void test_save_session_drops_reverted_assignments() {
     TempLibrary lib;
     lib.addImage("dragon.png");
     lib.addModel("dragon.fbx");
+    // A pair line plus a legacy '!' exclusion line (from the era of
+    // automatic name-based pairing).
+    lib.writeCfg("dragon.fbx = dragon.png\n! dragon.fbx = dragon.png\n");
 
-    // First run: auto-paired by stem; the user reverts the pair and saves.
+    // First run: the user reverts the pair and saves the session.
     auto store = std::make_shared<DataStore>();
     AssetLibrary loader(store, stubValidator);
     loader.load(lib.root.string());
@@ -483,13 +482,13 @@ static void test_save_session_drops_reverted_assignments_and_excludes() {
         loader.saveSession(lib.root.string());
     CHECK(saved.assignmentsSaved == 0);
 
+    // The pair line is gone and the legacy exclusion line was cleaned up.
     std::ifstream cfg((lib.root / "assignments.cfg").string());
     std::string contents((std::istreambuf_iterator<char>(cfg)),
                          std::istreambuf_iterator<char>());
-    CHECK(contents.find("! dragon.fbx = dragon.png") != std::string::npos);
+    CHECK(contents.find("dragon.fbx") == std::string::npos);
 
-    // Second run: the exclusion keeps the pair unassigned despite the
-    // matching stems.
+    // Second run: nothing is assigned (and no auto-pairing resurrects it).
     auto store2 = std::make_shared<DataStore>();
     AssetLibrary loader2(store2, stubValidator);
     const AssetLibrary::Report report = loader2.load(lib.root.string());
@@ -497,15 +496,13 @@ static void test_save_session_drops_reverted_assignments_and_excludes() {
     CHECK(report.assignmentsCreated == 0);
     CHECK(store2->assignmentIds().empty());
 
-    // Re-assigning and saving again removes the exclusion and restores the
-    // pair line.
+    // Re-assigning and saving again restores the pair line.
     store2->assign(modelByName(*store2, "dragon.fbx"),
                    imageByName(*store2, "dragon.png"));
     loader2.saveSession(lib.root.string());
     std::ifstream cfg2((lib.root / "assignments.cfg").string());
     std::string contents2((std::istreambuf_iterator<char>(cfg2)),
                           std::istreambuf_iterator<char>());
-    CHECK(contents2.find("! dragon.fbx") == std::string::npos);
     CHECK(contents2.find("dragon.fbx = dragon.png") != std::string::npos);
 }
 
@@ -556,8 +553,7 @@ static void test_missing_root_is_not_an_error() {
 void run_assetlibrary_tests() {
     test_loads_and_validates_assets();
     test_explicit_pairs_from_cfg();
-    test_auto_pairs_by_stem();
-    test_cfg_and_stem_pair_do_not_duplicate();
+    test_no_automatic_name_based_pairing();
     test_cfg_pose_columns_are_applied();
     test_cfg_per_axis_scale();
     test_cfg_pose_partial_and_missing_defaults();
@@ -568,7 +564,7 @@ void run_assetlibrary_tests() {
     test_persist_identity_writes_bare_pair();
     test_persist_rejects_non_library_assets();
     test_save_session_copies_external_files_and_persists();
-    test_save_session_drops_reverted_assignments_and_excludes();
+    test_save_session_drops_reverted_assignments();
     test_save_session_moves_removed_assets_and_drops_stale_lines();
     test_missing_root_is_not_an_error();
 }

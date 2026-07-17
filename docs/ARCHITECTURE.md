@@ -59,11 +59,12 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
 
 - `AssetLibrary` — loads the default asset folder (`assets/library`, or
   `AVB_LIBRARY_DIR`) into the store at startup: images and FBX models are
-  validated like manual uploads, and assignments are resolved by file name -
-  explicit `model.fbx = image.png` pairs from `assignments.cfg` plus automatic
-  pairing of files sharing a base name (`dragon.fbx` + `dragon.png`). A
-  repeated pair line places the model on the image once per line (each
-  instance with its own pose, in file order). Pair
+  validated like manual uploads, and assignments come exclusively from
+  explicit `model.fbx = image.png` pairs in `assignments.cfg` (there is no
+  automatic name-based pairing; legacy `!` exclusion lines from when there
+  was are ignored and cleaned up on the next session save). A repeated pair
+  line places the model on the image once per line (each instance with its
+  own pose, in file order). Pair
   lines carry optional pose columns (`| t=x,y,z r=x,y,z s=v` or `s=x,y,z`,
   plus `ot=x,y,z or=x,y,z` for the pose's origin; each part defaulting to
   identity when omitted); `persistAssignment()` writes a saved
@@ -73,9 +74,8 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
   session to library" button) fully syncs the library with the session:
   externally-uploaded files are copied in (store re-pointed at the copies),
   files of removed assets are moved to `<root>/removed/`, and the cfg is
-  rewritten to exactly the current assignments - stale lines dropped and `!`
-  exclusion lines emitted for reverted stem-matching pairs (load() honours
-  them by skipping auto-pairing), so removals survive restarts too. The FBX
+  rewritten to exactly the current assignments - stale lines dropped, so
+  removals survive restarts too. The FBX
   check is injected as a callback so the storage layer stays free of render
   dependencies (the app passes `ModelLoader::validateModelFile`).
 

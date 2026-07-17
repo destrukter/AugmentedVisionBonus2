@@ -37,10 +37,9 @@ by one shared in-memory data store (see `src/storage`).
    - **Save session to library**: a full sync — assets uploaded from outside
      the library are copied into `assets/library/`, every assignment is
      written with its pose to `assignments.cfg`, stale entries for reverted
-     assignments are dropped (name-matching pairs get a `!` exclusion line so
-     auto-pairing doesn't recreate them), and files of removed assets are
-     moved to `assets/library/removed/`. The next start restores exactly the
-     saved session.
+     assignments are dropped, and files of removed assets are moved to
+     `assets/library/removed/`. The next start restores exactly the saved
+     session.
    - Each picture has one **Configure** button that opens the image (with all
      its assigned models) in the Configure window.
 
@@ -100,13 +99,12 @@ assets/library/
 └── assignments.cfg   # optional model -> image pairs
 ```
 
-Assignments between them are resolved **by file name**, two ways:
-
-1. Explicit pairs in `assignments.cfg`, one per line (case-insensitive):
-   `model-file.fbx = image-file.png`. Repeating a line places the same model
-   on the image several times (one copy per line, each with its own pose).
-2. Automatically by base name: `dragon.fbx` + `dragon.png` are paired without
-   any config entry.
+Assignments between them are resolved **by file name** from explicit pairs in
+`assignments.cfg`, one per line (case-insensitive):
+`model-file.fbx = image-file.png`. Repeating a line places the same model on
+the image several times (one copy per line, each with its own pose). There is
+no automatic pairing: files sharing a base name (`dragon.fbx` + `dragon.png`)
+are not assigned to each other unless the cfg says so.
 
 A pair line may carry optional pose columns after a `|`; each part can be
 omitted and defaults to the identity pose (translation 0, rotation 0, scale 1):

@@ -21,16 +21,16 @@ class DataStore;
 ///     <root>/models/          FBX models (*.fbx)
 ///     <root>/assignments.cfg  optional model->image pairs (see below)
 ///
-/// Assignments are resolved **by file name**, two ways:
-///  1. Explicit pairs in assignments.cfg, one per line:
-///         model-file.fbx = image-file.png
-///     (`#`-prefixed lines are comments; names are matched case-insensitively
-///     against the files found in the two folders.) Repeating a pair line
-///     places the same model on the image several times - one instance per
-///     line, in file order, each with its own pose.
-///  2. Automatically: a model and an image sharing the same base name (stem)
-///     are paired, e.g. `dragon.fbx` + `dragon.png` (never when any instance
-///     of the pair already exists).
+/// Assignments are resolved **by file name** from explicit pairs in
+/// assignments.cfg, one per line:
+///
+///     model-file.fbx = image-file.png
+///
+/// (`#`-prefixed lines are comments; names are matched case-insensitively
+/// against the files found in the two folders.) Repeating a pair line places
+/// the same model on the image several times - one instance per line, in
+/// file order, each with its own pose. There is no automatic pairing: files
+/// sharing a base name are NOT assigned to each other unless the cfg says so.
 ///
 /// A pair line may carry optional pose columns after a `|`:
 ///
@@ -44,13 +44,8 @@ class DataStore;
 /// 0, scale 1). Poses configured in the app are written back into these
 /// columns via persistAssignment(), so they survive restarts.
 ///
-/// A line starting with `!` is an exclusion:
-///
-///     ! model-file.fbx = image-file.png
-///
-/// It suppresses the automatic stem pairing for exactly that pair - written
-/// by saveSession() when a name-matching pair was reverted in the app, so the
-/// removal survives restarts too.
+/// Lines starting with `!` (exclusions from the era of automatic name-based
+/// pairing) are ignored on load and dropped by the next session save.
 ///
 /// Every file is validated the same way a manual upload is (images must
 /// decode; models must pass the injected validator); failures are reported as
@@ -80,7 +75,7 @@ public:
     /// `<rootDir>/assignments.cfg` so it survives restarts. The edit is
     /// surgical: the pair's lines are rewritten in place - one line per
     /// instance of the (model, image) pair, in creation order - (or appended
-    /// when the pair, e.g. one auto-created by stem matching, has no line
+    /// when the pair, e.g. one assigned in the app this session, has no line
     /// yet) and every other line, including comments, is preserved. Identity
     /// poses write a bare pair with no pose columns.
     ///
@@ -103,10 +98,8 @@ public:
     ///  * library files whose asset was removed from the session are moved
     ///    into `<root>/removed/` (never deleted outright);
     ///  * assignments.cfg is rewritten to hold exactly the current
-    ///    assignments with their poses: stale pair lines are dropped, and a
-    ///    `!` exclusion line is written for every name-matching (stem) pair
-    ///    that is currently unassigned, so reverting an auto-paired
-    ///    assignment survives restarts. Comments are preserved.
+    ///    assignments with their poses: stale pair lines (and legacy `!`
+    ///    exclusion lines) are dropped. Comments are preserved.
     /// Missing library folders are created.
     SessionSaveResult saveSession(const std::string& rootDir);
 

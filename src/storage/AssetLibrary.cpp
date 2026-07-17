@@ -288,10 +288,8 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
         ++report.modelsAdded;
     }
 
-    // Explicit name pairs from assignments.cfg. `!`-prefixed lines are
-    // exclusions: they suppress the automatic stem pairing below (written by
-    // saveSession when a name-matching pair was reverted in the app).
-    std::set<std::string> excludedPairs;
+    // Explicit name pairs from assignments.cfg - the only way assignments
+    // are created at load time (there is no automatic name-based pairing).
     const fs::path cfgPath = root / "assignments.cfg";
     if (fs::exists(cfgPath, ec)) {
         std::ifstream cfg(cfgPath);
@@ -304,18 +302,9 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
                 continue;
             }
             if (stripped[0] == '!') {
-                std::string exModel;
-                std::string exImage;
-                std::string exPose;
-                if (splitPairLine(trim(stripped.substr(1)), exModel, exImage,
-                                  exPose)) {
-                    excludedPairs.insert(pairKey(exModel, exImage));
-                } else {
-                    report.warnings.push_back(
-                        "assignments.cfg line " + std::to_string(lineNo) +
-                        ": malformed exclusion, expected "
-                        "'! model-file = image-file', skipped");
-                }
+                // Legacy exclusion lines from the era of automatic stem
+                // pairing; meaningless now, ignored (and dropped on the next
+                // session save).
                 continue;
             }
             std::string modelName;
@@ -347,30 +336,6 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
                     parsePose(poseSpec, lineNo, report.warnings);
                 store_->setTransform(assignmentId, pose.transform);
                 store_->setOrigin(assignmentId, pose.origin);
-            }
-        }
-    }
-
-    // Automatic pairing: same base name (stem) links a model to an image,
-    // e.g. dragon.fbx <-> dragon.png - unless the pair is excluded.
-    for (const Id modelId : store_->modelIds()) {
-        const ModelAsset* model = store_->model(modelId);
-        if (!model) {
-            continue;
-        }
-        const std::string stem = toLower(fs::path(model->name).stem().string());
-        for (const Id imageId : store_->imageIds()) {
-            const ImageAsset* img = store_->image(imageId);
-            if (!img ||
-                toLower(fs::path(img->name).stem().string()) != stem) {
-                continue;
-            }
-            if (excludedPairs.count(pairKey(model->name, img->name))) {
-                continue; // reverted in a saved session, keep it unassigned
-            }
-            if (!store_->findAssignment(modelId, imageId)) {
-                store_->assign(modelId, imageId);
-                ++report.assignmentsCreated;
             }
         }
     }
@@ -570,11 +535,8 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
     // ---- 3. Rewrite assignments.cfg to hold exactly the current session:
     // fresh pair lines for every current assignment (one line per instance,
     // in creation order, when the same model sits on an image several
-    // times), `!` exclusions for stem-matching pairs that are currently
-    // unassigned (so reverting an auto-paired assignment sticks), stale
-    // lines dropped, comments kept.
+    // times), stale lines dropped, comments kept.
     std::map<std::string, std::vector<std::string>> pairLines; // key -> lines
-    std::map<std::string, std::string> exclusionLines;         // key -> line
     int assignmentLineCount = 0;
     for (const Id assignmentId : store_->assignmentIds()) {
         const Assignment* a = store_->assignment(assignmentId);
@@ -594,23 +556,6 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
             model->name, image->name, a->origin, a->transform));
         ++assignmentLineCount;
     }
-    for (const Id modelId : store_->modelIds()) {
-        const ModelAsset* model = store_->model(modelId);
-        if (!model || !isInLibraryFolder(model->filePath, root, "models")) {
-            continue;
-        }
-        const std::string stem = toLower(fs::path(model->name).stem().string());
-        for (const Id imageId : store_->imageIds()) {
-            const ImageAsset* img = store_->image(imageId);
-            if (!img || !isInLibraryFolder(img->filePath, root, "images") ||
-                toLower(fs::path(img->name).stem().string()) != stem ||
-                store_->findAssignment(modelId, imageId)) {
-                continue;
-            }
-            exclusionLines[pairKey(model->name, img->name)] =
-                "! " + model->name + " = " + img->name;
-        }
-    }
     result.assignmentsSaved = assignmentLineCount;
 
     const fs::path cfgPath = root / "assignments.cfg";
@@ -623,16 +568,15 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
         }
     }
     std::vector<std::string> out;
-    out.reserve(lines.size() + assignmentLineCount + exclusionLines.size());
+    out.reserve(lines.size() + assignmentLineCount);
     for (const std::string& line : lines) {
-        std::string stripped = trim(line);
+        const std::string stripped = trim(line);
         if (stripped.empty() || stripped[0] == '#') {
             out.push_back(line); // comments and spacing survive the sync
             continue;
         }
-        const bool exclusion = stripped[0] == '!';
-        if (exclusion) {
-            stripped = trim(stripped.substr(1));
+        if (stripped[0] == '!') {
+            continue; // legacy stem-pairing exclusion line -> dropped
         }
         std::string modelName;
         std::string imageName;
@@ -642,13 +586,7 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
             continue;
         }
         const std::string key = pairKey(modelName, imageName);
-        if (exclusion) {
-            if (const auto it = exclusionLines.find(key);
-                it != exclusionLines.end()) {
-                out.push_back(it->second); // refresh in place
-                exclusionLines.erase(it);
-            }
-        } else if (const auto it = pairLines.find(key); it != pairLines.end()) {
+        if (const auto it = pairLines.find(key); it != pairLines.end()) {
             // The pair's first line is refreshed in place with all of its
             // instance lines; the pair's other (stale) lines are dropped.
             out.insert(out.end(), it->second.begin(), it->second.end());
@@ -659,9 +597,6 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
     for (const auto& [key, instanceLines] : pairLines) {
         // New assignments without an existing line.
         out.insert(out.end(), instanceLines.begin(), instanceLines.end());
-    }
-    for (const auto& [key, line] : exclusionLines) {
-        out.push_back(line);
     }
 
     std::ofstream file(cfgPath, std::ios::trunc);
