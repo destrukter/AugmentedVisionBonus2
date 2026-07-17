@@ -72,7 +72,10 @@ private:
     bool ensureTarget(int width, int height);
     void destroyTarget();
     bool ensureImagePlane(Id imageId);
-    Ogre::SceneNode* ensureModelNode(Id modelId);
+    /// The node for the `index`-th instance of `modelId` this render (the
+    /// same model may be drawn several times per image), created on demand.
+    /// Returns null when the model's mesh cannot be loaded.
+    Ogre::SceneNode* ensureModelNode(Id modelId, std::size_t index);
 
     std::shared_ptr<OgreContext> context_;
     std::shared_ptr<ModelLoader> loader_;
@@ -87,7 +90,8 @@ private:
     std::string rttName_;
 
     Id currentImageId_{kInvalidId};
-    std::unordered_map<Id, Ogre::SceneNode*> modelNodes_;
+    // modelId -> one node per drawn instance of that model.
+    std::unordered_map<Id, std::vector<Ogre::SceneNode*>> modelNodes_;
 
     cv::Mat output_;                        // RGBA result
     std::vector<unsigned char> readback_;

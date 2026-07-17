@@ -26,8 +26,9 @@ struct ModelAsset {
 
 /// Links one model to one image with a configurable relative pose.
 ///
-/// One model may appear in many assignments (one per image it is assigned to);
-/// the (modelId, imageId) pair is unique. Both poses default to identity.
+/// One model may appear in many assignments - across different images, and
+/// also multiple times on the *same* image (each placed copy is its own
+/// assignment with its own pose). Both poses default to identity.
 ///
 /// The model's full pose relative to the image is `origin * transform`.
 /// `origin` is a rigid (translation + rotation, scale 1) base pose set by the

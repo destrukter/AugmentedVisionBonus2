@@ -132,9 +132,8 @@ Id DataStore::assign(Id modelId, Id imageId) {
         images_.find(imageId) == images_.end()) {
         return kInvalidId;
     }
-    if (const auto existing = findAssignment(modelId, imageId)) {
-        return *existing;
-    }
+    // Every call creates a new assignment - the same model can be placed on
+    // one image any number of times, each instance with its own pose.
     Assignment a;
     a.id = nextId();
     a.modelId = modelId;
@@ -161,9 +160,6 @@ bool DataStore::reassignImage(Id assignmentId, Id newImageId) {
     if (it == assignments_.end() || images_.find(newImageId) == images_.end()) {
         return false;
     }
-    if (findAssignment(it->second.modelId, newImageId)) {
-        return false; // pair already exists
-    }
     it->second.imageId = newImageId;
     return true;
 }
@@ -174,12 +170,16 @@ const Assignment* DataStore::assignment(Id assignmentId) const {
 }
 
 std::optional<Id> DataStore::findAssignment(Id modelId, Id imageId) const {
+    // Several assignments may exist for the pair; report the oldest so the
+    // result is deterministic (ids increase monotonically with creation).
+    std::optional<Id> oldest;
     for (const auto& [id, a] : assignments_) {
-        if (a.modelId == modelId && a.imageId == imageId) {
-            return id;
+        if (a.modelId == modelId && a.imageId == imageId &&
+            (!oldest || id < *oldest)) {
+            oldest = id;
         }
     }
-    return std::nullopt;
+    return oldest;
 }
 
 std::vector<Id> DataStore::assignmentsForImage(Id imageId) const {

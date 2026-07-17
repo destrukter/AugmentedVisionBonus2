@@ -59,20 +59,22 @@ public:
 
     // ---- Assignments ------------------------------------------------------
     /// Assigns `modelId` to `imageId` with a default (identity) transform.
-    /// If the pair already exists the existing assignment id is returned.
-    /// Returns kInvalidId when either id is unknown.
+    /// Every call creates a new assignment: the same model can be placed on
+    /// one image multiple times, each instance with its own pose. Returns
+    /// kInvalidId when either id is unknown.
     Id assign(Id modelId, Id imageId);
 
-    /// Reverts an assignment. Both overloads are no-ops for unknown inputs.
+    /// Reverts an assignment. Both overloads are no-ops for unknown inputs;
+    /// the (model, image) overload removes the pair's oldest instance.
     bool unassign(Id assignmentId);
     bool unassign(Id modelId, Id imageId);
 
     /// Reassigns an existing assignment to a different image, preserving its
-    /// transform. Returns false if the target pair already exists or ids are
-    /// unknown.
+    /// transform. Returns false when either id is unknown.
     bool reassignImage(Id assignmentId, Id newImageId);
 
     const Assignment* assignment(Id assignmentId) const;
+    /// The oldest assignment of the (model, image) pair, if any exists.
     std::optional<Id> findAssignment(Id modelId, Id imageId) const;
 
     /// All assignments for a given image (used by the Camera window to know

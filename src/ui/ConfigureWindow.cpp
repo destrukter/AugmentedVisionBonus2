@@ -260,21 +260,21 @@ void ConfigureWindow::drawUi() {
 
     // Model selector: which of the image's models the fields/gizmo edit.
     // Every model stays visible in the viewport; unsaved ones are marked *.
-    const Assignment* selected = store_->assignment(selectedAssignment_);
-    const ModelAsset* selectedModel =
-        selected ? store_->model(selected->modelId) : nullptr;
+    // Labels carry an instance number when the same model is assigned to the
+    // image more than once (matching the Upload window's assignment list).
+    const auto labels = assignmentDisplayLabels(*store_, assignments);
+    const auto selectedLabel = labels.find(selectedAssignment_);
     ImGui::SetNextItemWidth(280.0f);
-    if (ImGui::BeginCombo("Model",
-                          selectedModel ? selectedModel->name.c_str()
-                                        : "<missing>")) {
+    if (ImGui::BeginCombo("Model", selectedLabel != labels.end()
+                                       ? selectedLabel->second.c_str()
+                                       : "<missing>")) {
         for (const Id aid : assignments) {
-            const Assignment* a = store_->assignment(aid);
-            const ModelAsset* m = a ? store_->model(a->modelId) : nullptr;
             const auto it = working_.find(aid);
             const bool entryDirty = it != working_.end() && it->second.dirty;
-            const std::string label = (m ? m->name : "<missing>") +
-                                      (entryDirty ? " *" : "") + "##" +
-                                      std::to_string(aid);
+            const auto name = labels.find(aid);
+            const std::string label =
+                (name != labels.end() ? name->second : "<missing>") +
+                (entryDirty ? " *" : "") + "##" + std::to_string(aid);
             if (ImGui::Selectable(label.c_str(), aid == selectedAssignment_)) {
                 selectedAssignment_ = aid;
             }

@@ -43,14 +43,31 @@ static void test_one_model_many_images() {
     CHECK(store.assignmentsForImage(img1).size() == 1);
 }
 
-static void test_assign_is_idempotent_per_pair() {
+static void test_assign_same_pair_creates_instances() {
     DataStore store;
     const Id model = store.addModel("m.fbx");
     const Id img = store.addImage("1.png");
     const Id a1 = store.assign(model, img);
-    const Id a2 = store.assign(model, img);  // same pair
-    CHECK(a1 == a2);
-    CHECK(store.assignmentIds().size() == 1);
+    const Id a2 = store.assign(model, img);  // same pair again -> new instance
+    CHECK(a1 != a2);
+    CHECK(store.assignmentsForImage(img).size() == 2);
+
+    // Each instance carries its own pose.
+    Transform t;
+    t.translation = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
+    CHECK(store.setTransform(a2, t));
+    CHECK(store.transform(a1)->isIdentity());
+    CHECK(!store.transform(a2)->isIdentity());
+
+    // findAssignment reports the oldest instance (deterministically).
+    const auto found = store.findAssignment(model, img);
+    CHECK(found.has_value());
+    CHECK(*found == a1);
+
+    // Unassigning one instance keeps the other.
+    CHECK(store.unassign(a1));
+    CHECK(store.assignmentsForImage(img).size() == 1);
+    CHECK(store.assignment(a2) != nullptr);
 }
 
 static void test_revert_and_reassign() {
@@ -156,7 +173,7 @@ void run_datastore_tests() {
     test_add_and_lookup();
     test_assignment_defaults_to_identity();
     test_one_model_many_images();
-    test_assign_is_idempotent_per_pair();
+    test_assign_same_pair_creates_instances();
     test_revert_and_reassign();
     test_set_transform_persists();
     test_set_origin_persists();

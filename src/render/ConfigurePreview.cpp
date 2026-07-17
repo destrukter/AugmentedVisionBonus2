@@ -192,9 +192,11 @@ bool ConfigurePreview::ensureImagePlane(Id imageId) {
     return true;
 }
 
-Ogre::SceneNode* ConfigurePreview::ensureModelNode(Id modelId) {
-    if (const auto it = modelNodes_.find(modelId); it != modelNodes_.end()) {
-        return it->second;
+Ogre::SceneNode* ConfigurePreview::ensureModelNode(Id modelId,
+                                                   std::size_t index) {
+    std::vector<Ogre::SceneNode*>& pool = modelNodes_[modelId];
+    if (index < pool.size()) {
+        return pool[index];
     }
     const ModelAsset* model = store_->model(modelId);
     if (!model) {
@@ -208,13 +210,15 @@ Ogre::SceneNode* ConfigurePreview::ensureModelNode(Id modelId) {
         return nullptr;
     }
     Ogre::SceneManager* sm = context_->sceneManager();
-    Ogre::Entity* entity =
-        sm->createEntity("avb/cfg/ent/" + std::to_string(modelId), mesh);
+    Ogre::Entity* entity = sm->createEntity(
+        "avb/cfg/ent/" + std::to_string(modelId) + "/" +
+            std::to_string(pool.size()),
+        mesh);
     entity->setVisibilityFlags(kConfigPreviewVisibilityMask);
     Ogre::SceneNode* node = root_->createChildSceneNode();
     node->attachObject(entity);
     node->setVisible(false);
-    modelNodes_.emplace(modelId, node);
+    pool.push_back(node);
     return node;
 }
 
@@ -235,15 +239,22 @@ bool ConfigurePreview::render(Id imageId, const std::vector<ModelPose>& models,
     }
 
     // Show exactly the requested models: everything else (models of other
-    // images, models unassigned since the last render) is hidden.
-    for (auto& [id, node] : modelNodes_) {
-        node->setVisible(false);
+    // images, models/instances unassigned since the last render) is hidden.
+    for (auto& [id, pool] : modelNodes_) {
+        for (Ogre::SceneNode* node : pool) {
+            node->setVisible(false);
+        }
     }
+    // The same model may appear several times (assigned to the image more
+    // than once); each occurrence gets its own node instance.
+    std::unordered_map<Id, std::size_t> instancesUsed;
     for (const ModelPose& m : models) {
-        Ogre::SceneNode* modelNode = ensureModelNode(m.modelId);
+        Ogre::SceneNode* modelNode =
+            ensureModelNode(m.modelId, instancesUsed[m.modelId]);
         if (!modelNode) {
             continue; // model failed to load; still render the others
         }
+        ++instancesUsed[m.modelId];
         applyPose(modelNode, m.pose);
         modelNode->setVisible(true);
     }

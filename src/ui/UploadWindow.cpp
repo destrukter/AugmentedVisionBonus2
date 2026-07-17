@@ -227,11 +227,14 @@ void UploadWindow::drawAssignmentSection() {
         selectedImage_ != kInvalidId && selectedModel_ != kInvalidId;
     ImGui::BeginDisabled(!canAssign);
     if (ImGui::Button("Assign selected model -> selected image")) {
-        // One model can be assigned to many images; assign() is idempotent per
-        // (model, image) pair.
+        // One model can be assigned to many images - and to the same image
+        // several times: every click adds another independent copy with its
+        // own pose.
         store_->assign(selectedModel_, selectedImage_);
     }
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("(assigning again adds another copy)");
 
     if (selectedImage_ == kInvalidId) {
         ImGui::TextDisabled("Select an image to see its assigned models.");
@@ -254,14 +257,16 @@ void UploadWindow::drawAssignmentSection() {
         ImGui::TextDisabled("(no models assigned yet)");
     }
 
+    // Labels carry an instance number when the same model is assigned to the
+    // image more than once (matching the Configure window's dropdown).
+    const auto labels = assignmentDisplayLabels(*store_, assignments);
     for (const Id aid : assignments) {
-        const Assignment* a = store_->assignment(aid);
-        if (!a) {
+        const auto label = labels.find(aid);
+        if (label == labels.end()) {
             continue;
         }
-        const ModelAsset* model = store_->model(a->modelId);
         ImGui::PushID(static_cast<int>(aid));
-        ImGui::BulletText("%s", model ? model->name.c_str() : "<missing>");
+        ImGui::BulletText("%s", label->second.c_str());
         ImGui::SameLine();
         if (ImGui::Button("Revert")) {
             store_->unassign(aid);

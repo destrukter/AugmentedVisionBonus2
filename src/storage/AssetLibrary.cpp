@@ -337,13 +337,11 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
                     " not found in the library, skipped");
                 continue;
             }
-            Id assignmentId;
-            if (const auto existing = store_->findAssignment(modelId, imageId)) {
-                assignmentId = *existing;
-            } else {
-                assignmentId = store_->assign(modelId, imageId);
-                ++report.assignmentsCreated;
-            }
+            // Each pair line creates its own assignment: repeating a line
+            // places the same model on the image several times (one instance
+            // per line, in file order, each with its own pose).
+            const Id assignmentId = store_->assign(modelId, imageId);
+            ++report.assignmentsCreated;
             if (!poseSpec.empty()) {
                 const PoseSpec pose =
                     parsePose(poseSpec, lineNo, report.warnings);
@@ -397,14 +395,25 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
         return false; // not library assets: names would not resolve on restart
     }
 
-    const std::string newLine = formatPairLine(
-        model->name, image->name, assignment->origin, assignment->transform);
+    // The cfg holds one line per *instance* of a pair (the same model may be
+    // placed on an image several times), in assignment-creation order - the
+    // order load() recreates them in. A single instance's line cannot be
+    // told apart from its siblings', so all of the pair's lines are rewritten
+    // from the store's current instances.
+    std::vector<std::string> newLines;
+    for (const Id aid : store_->assignmentsForModel(assignment->modelId)) {
+        const Assignment* instance = store_->assignment(aid);
+        if (instance && instance->imageId == assignment->imageId) {
+            newLines.push_back(formatPairLine(model->name, image->name,
+                                              instance->origin,
+                                              instance->transform));
+        }
+    }
 
     // Rewrite only the line(s) for this pair; keep everything else - other
-    // pairs, comments, blank lines - byte-for-byte. Duplicate lines for the
-    // pair are collapsed into one (load applies them in order, so a stale
-    // duplicate would win over the update otherwise), and an exclusion line
-    // for the pair is dropped since the pair is assigned again.
+    // pairs, comments, blank lines - byte-for-byte. The pair's first line is
+    // replaced by the full instance list; its other lines (and any now-stale
+    // exclusion line) are dropped.
     const fs::path cfgPath = root / "assignments.cfg";
     std::vector<std::string> lines;
     {
@@ -417,7 +426,7 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
     const std::string wanted = pairKey(model->name, image->name);
     bool replaced = false;
     std::vector<std::string> out;
-    out.reserve(lines.size() + 1);
+    out.reserve(lines.size() + newLines.size());
     for (const std::string& line : lines) {
         std::string stripped = trim(line);
         const bool exclusion = !stripped.empty() && stripped[0] == '!';
@@ -434,12 +443,12 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
         if (!matchesPair) {
             out.push_back(line);
         } else if (!exclusion && !replaced) {
-            out.push_back(newLine);
+            out.insert(out.end(), newLines.begin(), newLines.end());
             replaced = true;
-        } // duplicates and now-stale exclusions of the pair are dropped
+        } // remaining pair lines and stale exclusions of the pair are dropped
     }
     if (!replaced) {
-        out.push_back(newLine);
+        out.insert(out.end(), newLines.begin(), newLines.end());
     }
 
     std::ofstream file(cfgPath, std::ios::trunc);
@@ -559,11 +568,14 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
     }
 
     // ---- 3. Rewrite assignments.cfg to hold exactly the current session:
-    // fresh pair lines for every current assignment, `!` exclusions for
-    // stem-matching pairs that are currently unassigned (so reverting an
-    // auto-paired assignment sticks), stale lines dropped, comments kept.
-    std::map<std::string, std::string> pairLines;       // key -> line
-    std::map<std::string, std::string> exclusionLines;  // key -> line
+    // fresh pair lines for every current assignment (one line per instance,
+    // in creation order, when the same model sits on an image several
+    // times), `!` exclusions for stem-matching pairs that are currently
+    // unassigned (so reverting an auto-paired assignment sticks), stale
+    // lines dropped, comments kept.
+    std::map<std::string, std::vector<std::string>> pairLines; // key -> lines
+    std::map<std::string, std::string> exclusionLines;         // key -> line
+    int assignmentLineCount = 0;
     for (const Id assignmentId : store_->assignmentIds()) {
         const Assignment* a = store_->assignment(assignmentId);
         const ModelAsset* model = a ? store_->model(a->modelId) : nullptr;
@@ -578,8 +590,9 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
                 "' could not be saved (its files are not in the library)");
             continue;
         }
-        pairLines[pairKey(model->name, image->name)] =
-            formatPairLine(model->name, image->name, a->origin, a->transform);
+        pairLines[pairKey(model->name, image->name)].push_back(formatPairLine(
+            model->name, image->name, a->origin, a->transform));
+        ++assignmentLineCount;
     }
     for (const Id modelId : store_->modelIds()) {
         const ModelAsset* model = store_->model(modelId);
@@ -598,7 +611,7 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
                 "! " + model->name + " = " + img->name;
         }
     }
-    result.assignmentsSaved = static_cast<int>(pairLines.size());
+    result.assignmentsSaved = assignmentLineCount;
 
     const fs::path cfgPath = root / "assignments.cfg";
     std::vector<std::string> lines;
@@ -610,7 +623,7 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
         }
     }
     std::vector<std::string> out;
-    out.reserve(lines.size() + pairLines.size() + exclusionLines.size());
+    out.reserve(lines.size() + assignmentLineCount + exclusionLines.size());
     for (const std::string& line : lines) {
         std::string stripped = trim(line);
         if (stripped.empty() || stripped[0] == '#') {
@@ -629,15 +642,23 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
             continue;
         }
         const std::string key = pairKey(modelName, imageName);
-        auto& source = exclusion ? exclusionLines : pairLines;
-        if (const auto it = source.find(key); it != source.end()) {
-            out.push_back(it->second); // refresh in place
-            source.erase(it);
+        if (exclusion) {
+            if (const auto it = exclusionLines.find(key);
+                it != exclusionLines.end()) {
+                out.push_back(it->second); // refresh in place
+                exclusionLines.erase(it);
+            }
+        } else if (const auto it = pairLines.find(key); it != pairLines.end()) {
+            // The pair's first line is refreshed in place with all of its
+            // instance lines; the pair's other (stale) lines are dropped.
+            out.insert(out.end(), it->second.begin(), it->second.end());
+            pairLines.erase(it);
         }
         // else: stale (pair reverted / asset removed) -> dropped
     }
-    for (const auto& [key, line] : pairLines) {
-        out.push_back(line); // new assignments without an existing line
+    for (const auto& [key, instanceLines] : pairLines) {
+        // New assignments without an existing line.
+        out.insert(out.end(), instanceLines.begin(), instanceLines.end());
     }
     for (const auto& [key, line] : exclusionLines) {
         out.push_back(line);

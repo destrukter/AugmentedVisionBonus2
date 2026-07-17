@@ -28,7 +28,9 @@ by one shared in-memory data store (see `src/storage`).
      outcome (success / warning / error) is shown in the window — a broken
      image or model file is rejected with a reason, and images with too few
      trackable features get a warning.
-   - Assign an FBX model to an image. One model may be assigned to many images.
+   - Assign an FBX model to an image. One model may be assigned to many
+     images - and to the same image several times: each click of Assign adds
+     another independent copy with its own pose.
    - Revert (unassign) and re-assign freely.
    - Remove images/models with the `x` next to each entry (assignments to
      them are removed along).
@@ -101,7 +103,8 @@ assets/library/
 Assignments between them are resolved **by file name**, two ways:
 
 1. Explicit pairs in `assignments.cfg`, one per line (case-insensitive):
-   `model-file.fbx = image-file.png`
+   `model-file.fbx = image-file.png`. Repeating a line places the same model
+   on the image several times (one copy per line, each with its own pose).
 2. Automatically by base name: `dragon.fbx` + `dragon.png` are paired without
    any config entry.
 

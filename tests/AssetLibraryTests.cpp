@@ -319,6 +319,67 @@ static void test_persisted_origin_survives_reload() {
     CHECK(store2->transform(*aid2)->scale.isApprox(pose.scale, 1e-4f));
 }
 
+static void test_duplicate_pair_lines_create_instances() {
+    TempLibrary lib;
+    lib.addImage("dragon.png");
+    lib.addModel("dragon.fbx");
+    // Two lines for the same pair = the model placed on the image twice,
+    // each instance with its own pose (in file order).
+    lib.writeCfg(
+        "dragon.fbx = dragon.png | t=0.5,0,0\n"
+        "dragon.fbx = dragon.png | t=-0.5,0,0 s=2\n");
+
+    auto store = std::make_shared<DataStore>();
+    AssetLibrary loader(store, stubValidator);
+    const AssetLibrary::Report report = loader.load(lib.root.string());
+    CHECK(report.warnings.empty());
+    CHECK(report.assignmentsCreated == 2);
+
+    const Id image = imageByName(*store, "dragon.png");
+    const std::vector<Id> instances = store->assignmentsForImage(image);
+    CHECK(instances.size() == 2);
+    if (instances.size() != 2) {
+        return;
+    }
+    CHECK(store->transform(instances[0])->translation.x() > 0.4f);
+    CHECK(store->transform(instances[1])->translation.x() < -0.4f);
+    CHECK(store->transform(instances[1])->scale.x() > 1.9f);
+
+    // Persisting one instance rewrites the pair's lines from the store and
+    // must not lose its sibling.
+    Transform moved = *store->transform(instances[0]);
+    moved.translation.y() = 0.25f;
+    store->setTransform(instances[0], moved);
+    CHECK(loader.persistAssignment(lib.root.string(), instances[0]));
+
+    auto store2 = std::make_shared<DataStore>();
+    AssetLibrary loader2(store2, stubValidator);
+    const AssetLibrary::Report report2 = loader2.load(lib.root.string());
+    CHECK(report2.warnings.empty());
+    const std::vector<Id> restored =
+        store2->assignmentsForImage(imageByName(*store2, "dragon.png"));
+    CHECK(restored.size() == 2);
+    if (restored.size() != 2) {
+        return;
+    }
+    CHECK(std::abs(store2->transform(restored[0])->translation.y() - 0.25f) <
+          1e-4f);
+    CHECK(store2->transform(restored[1])->scale.x() > 1.9f);
+
+    // A full session save also keeps one line per instance...
+    const AssetLibrary::SessionSaveResult saved =
+        loader2.saveSession(lib.root.string());
+    CHECK(saved.warnings.empty());
+    CHECK(saved.assignmentsSaved == 2);
+
+    // ...so a third run still restores both instances.
+    auto store3 = std::make_shared<DataStore>();
+    AssetLibrary loader3(store3, stubValidator);
+    loader3.load(lib.root.string());
+    CHECK(store3->assignmentsForImage(imageByName(*store3, "dragon.png"))
+              .size() == 2);
+}
+
 static void test_persist_identity_writes_bare_pair() {
     TempLibrary lib;
     lib.addImage("dragon.png");
@@ -503,6 +564,7 @@ void run_assetlibrary_tests() {
     test_cfg_pose_malformed_tokens_warn_and_default();
     test_persisted_pose_survives_reload();
     test_persisted_origin_survives_reload();
+    test_duplicate_pair_lines_create_instances();
     test_persist_identity_writes_bare_pair();
     test_persist_rejects_non_library_assets();
     test_save_session_copies_external_files_and_persists();

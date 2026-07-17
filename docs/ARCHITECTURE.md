@@ -44,9 +44,10 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
   to a 4x4 Eigen matrix. **Translation and rotation default to zero** per spec.
 - `Assets.h` — `ImageAsset`, `ModelAsset`, `Assignment`.
 - `DataStore` — CRUD for images/models and the assignment graph:
-  - `assign(model, image)` creates an assignment with an identity transform; the
-    `(model, image)` pair is unique, so one model maps to many images via many
-    assignments.
+  - `assign(model, image)` creates an assignment with an identity transform;
+    every call creates a new one, so a model maps to many images - and to the
+    same image several times (each placed copy is its own assignment with its
+    own pose).
   - `unassign(...)` reverts; `reassignImage(...)` moves an assignment.
   - `setTransform(assignment, t)` is what the Configure window's Save calls.
   - `setOrigin(assignment, o)` stores the rigid base pose written by the
@@ -60,7 +61,9 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
   `AVB_LIBRARY_DIR`) into the store at startup: images and FBX models are
   validated like manual uploads, and assignments are resolved by file name -
   explicit `model.fbx = image.png` pairs from `assignments.cfg` plus automatic
-  pairing of files sharing a base name (`dragon.fbx` + `dragon.png`). Pair
+  pairing of files sharing a base name (`dragon.fbx` + `dragon.png`). A
+  repeated pair line places the model on the image once per line (each
+  instance with its own pose, in file order). Pair
   lines carry optional pose columns (`| t=x,y,z r=x,y,z s=v` or `s=x,y,z`,
   plus `ot=x,y,z or=x,y,z` for the pose's origin; each part defaulting to
   identity when omitted); `persistAssignment()` writes a saved
