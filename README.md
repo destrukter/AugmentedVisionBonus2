@@ -53,13 +53,6 @@ by one shared in-memory data store (see `src/storage`).
      fields, matrix preview and gizmo follow the selection. Edits are kept
      per model, so switching never loses unsaved changes (marked `*`).
    - Numeric fields give exact control over the same values.
-   - **Set origin here** makes the selected model's current position/rotation
-     its new origin: the model stays put, translation and rotation read 0
-     again, and further edits are relative to that origin ("fold back"
-     undoes it). The origin is saved with the pose. While an origin is set,
-     the viewport marks it with an axes triad, and the gizmo's translate
-     arrows align with the origin's axes (so each arrow drives exactly one
-     translation field).
    - **Save** writes every modified pose back into the data store.
 
 3. **Camera window** (`src/ui/CameraWindow`)
@@ -112,12 +105,9 @@ omitted and defaults to the identity pose (translation 0, rotation 0, scale 1):
 ```
 model-file.fbx = image-file.png | t=0,0.5,0 r=0,90,0 s=2
 model-file.fbx = image-file.png | s=1,2,0.5
-model-file.fbx = image-file.png | t=0,0,0 r=0,0,0 s=1 ot=0,0.5,0 or=0,90,0
 ```
 
-`s` takes one uniform value or per-axis `x,y,z`. `ot`/`or` are the
-translation/rotation of the pose's *origin* (written when "Set origin here"
-was used; the model's full pose is origin x transform).
+`s` takes one uniform value or per-axis `x,y,z`.
 
 Poses saved in the Configure window are written back into these columns
 automatically (for library assets), so configured poses **survive restarts**.

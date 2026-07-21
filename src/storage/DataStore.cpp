@@ -233,23 +233,6 @@ bool DataStore::setTransform(Id assignmentId, const Transform& transform) {
     return true;
 }
 
-std::optional<Transform> DataStore::origin(Id assignmentId) const {
-    const auto it = assignments_.find(assignmentId);
-    if (it == assignments_.end()) {
-        return std::nullopt;
-    }
-    return it->second.origin;
-}
-
-bool DataStore::setOrigin(Id assignmentId, const Transform& origin) {
-    const auto it = assignments_.find(assignmentId);
-    if (it == assignments_.end()) {
-        return false;
-    }
-    it->second.origin = origin;
-    return true;
-}
-
 // ---- Bulk -----------------------------------------------------------------
 
 void DataStore::clear() {

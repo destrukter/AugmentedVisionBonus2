@@ -38,8 +38,7 @@ class DataStore;
 /// any ImGui window's GL pass; it re-binds OGRE's GL context itself.
 class ConfigurePreview {
 public:
-    /// One model to draw, at a full pose (origin * working transform)
-    /// relative to the image plane.
+    /// One model to draw, at its working pose relative to the image plane.
     struct ModelPose {
         Id modelId{kInvalidId};
         Eigen::Matrix4f pose{Eigen::Matrix4f::Identity()};

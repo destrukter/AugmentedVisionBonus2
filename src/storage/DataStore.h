@@ -90,12 +90,6 @@ public:
     /// Writes a new pose for an assignment (the Configure "Save" action).
     bool setTransform(Id assignmentId, const Transform& transform);
 
-    /// Reads the rigid base pose the editable transform is relative to
-    /// (identity unless "Set origin here" was used). The model's full pose is
-    /// origin * transform.
-    std::optional<Transform> origin(Id assignmentId) const;
-    bool setOrigin(Id assignmentId, const Transform& origin);
-
     // ---- Bulk -------------------------------------------------------------
     void clear();
 

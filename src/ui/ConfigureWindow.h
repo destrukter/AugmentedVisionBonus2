@@ -25,11 +25,6 @@ class ConfigurePreview;
 /// Edits live in per-model working copies until the user clicks "Save", which
 /// writes every modified pose back into the DataStore, so switching models in
 /// the dropdown never loses unsaved changes.
-///
-/// "Set origin here" folds the selected model's current translation/rotation
-/// into the assignment's persistent origin: the model stays where it is, the
-/// editable translation/rotation read zero again, and further edits are
-/// relative to that origin.
 class ConfigureWindow : public Window {
 public:
     /// Invoked after a pose was successfully saved to the store (used by the
@@ -59,17 +54,13 @@ protected:
 private:
     /// Per-assignment editable state (working copy of the stored pose).
     struct WorkingState {
-        Transform origin;     ///< Rigid base pose ("Set origin here").
-        Transform transform;  ///< Editable pose, relative to origin.
+        Transform transform;  ///< Editable pose of the model on its image.
         bool dirty{false};    ///< Differs from the stored pose.
     };
 
     void drawGizmoViewport(WorkingState* selected);
     void save();    ///< Commit every dirty working copy back into the store.
     void revert();  ///< Reload all working copies from the store.
-    /// Folds the selected model's translation/rotation into its origin (the
-    /// model stays put; the editable values read zero afterwards).
-    void setOriginToCurrent();
 
     /// The open image's assignments, in store order; also drops stale working
     /// state and keeps selectedAssignment_ valid.
@@ -106,12 +97,10 @@ private:
     int canvasW_{0};
     int canvasH_{0};
     bool previewValid_{false};
-    /// Matrix the gizmo manipulates: the selected model's editable transform,
-    /// expressed in the assignment's origin frame (the origin is folded into
-    /// the view matrix handed to ImGuizmo, so the handles still render on the
-    /// model). Kept across the frames of one drag (and only rebuilt while the
-    /// gizmo is idle) because rebuilding it from the decomposed Euler angles
-    /// mid-drag makes the handles snap at representation boundaries.
+    /// Matrix the gizmo manipulates (the selected model's transform). Kept
+    /// across the frames of one drag (and only rebuilt while the gizmo is
+    /// idle) because rebuilding it from the decomposed Euler angles mid-drag
+    /// makes the handles snap at representation boundaries.
     Eigen::Matrix4f gizmoMatrix_{Eigen::Matrix4f::Identity()};
 };
 

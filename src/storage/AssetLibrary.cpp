@@ -122,21 +122,12 @@ bool parseFloats(const std::string& values, float* out, int count) {
     return parsed == count;
 }
 
-/// A parsed pose column set: the editable transform plus the rigid origin it
-/// is relative to (see Assignment).
-struct PoseSpec {
-    Transform origin;
-    Transform transform;
-};
-
-/// Parses the optional pose columns (`t=x,y,z r=x,y,z s=v ot=x,y,z or=x,y,z`,
-/// any subset, any order; `ot`/`or` are the origin's translation/rotation).
-/// Malformed tokens are reported and fall back to that component's identity
-/// default.
-PoseSpec parsePose(const std::string& spec, int lineNo,
-                   std::vector<std::string>& warnings) {
-    PoseSpec pose;
-    Transform& t = pose.transform;
+/// Parses the optional pose columns (`t=x,y,z r=x,y,z s=v`, any subset, any
+/// order). Malformed tokens are reported and fall back to that component's
+/// identity default.
+Transform parsePose(const std::string& spec, int lineNo,
+                    std::vector<std::string>& warnings) {
+    Transform t;
     std::istringstream in(spec);
     std::string token;
     while (in >> token) {
@@ -147,8 +138,7 @@ PoseSpec parsePose(const std::string& spec, int lineNo,
         };
         const auto eq = token.find('=');
         if (eq == std::string::npos || eq == 0 || eq + 1 >= token.size()) {
-            warn("is not of the form t=x,y,z / r=x,y,z / s=x,y,z (or s=v) / "
-                 "ot=x,y,z / or=x,y,z");
+            warn("is not of the form t=x,y,z / r=x,y,z / s=x,y,z (or s=v)");
             continue;
         }
         const std::string key = toLower(token.substr(0, eq));
@@ -158,11 +148,6 @@ PoseSpec parsePose(const std::string& spec, int lineNo,
             t.translation = Eigen::Vector3f(nums[0], nums[1], nums[2]);
         } else if (key == "r" && parseFloats(values, nums, 3)) {
             t.rotationEulerDeg = Eigen::Vector3f(nums[0], nums[1], nums[2]);
-        } else if (key == "ot" && parseFloats(values, nums, 3)) {
-            pose.origin.translation = Eigen::Vector3f(nums[0], nums[1], nums[2]);
-        } else if (key == "or" && parseFloats(values, nums, 3)) {
-            pose.origin.rotationEulerDeg =
-                Eigen::Vector3f(nums[0], nums[1], nums[2]);
         } else if (key == "s") {
             // Either three per-axis values or one uniform value.
             bool ok = parseFloats(values, nums, 3);
@@ -181,7 +166,7 @@ PoseSpec parsePose(const std::string& spec, int lineNo,
             warn("could not be parsed");
         }
     }
-    return pose;
+    return t;
 }
 
 std::string formatFloat(float v) {
@@ -200,33 +185,26 @@ std::string formatVec3(const Eigen::Vector3f& v) {
            formatFloat(v.z());
 }
 
-/// Formats the pose columns written after `|`; empty when both the transform
-/// and origin are identity (a bare pair line already means "identity"). A
-/// uniform scale is written as a single value, per-axis scales as x,y,z. The
-/// origin's translation/rotation are written as ot=/or= only when set.
-std::string formatPose(const Transform& origin, const Transform& t) {
-    if (t.isIdentity() && origin.isIdentity()) {
+/// Formats the pose columns written after `|`; empty for the identity pose
+/// (a bare pair line already means "identity"). A uniform scale is written as
+/// a single value, per-axis scales as x,y,z.
+std::string formatPose(const Transform& t) {
+    if (t.isIdentity()) {
         return "";
     }
     std::string scale = formatFloat(t.scale.x());
     if (t.scale.x() != t.scale.y() || t.scale.y() != t.scale.z()) {
         scale += "," + formatFloat(t.scale.y()) + "," + formatFloat(t.scale.z());
     }
-    std::string pose = "t=" + formatVec3(t.translation) + " r=" +
-                       formatVec3(t.rotationEulerDeg) + " s=" + scale;
-    if (!origin.isIdentity()) {
-        pose += " ot=" + formatVec3(origin.translation) + " or=" +
-                formatVec3(origin.rotationEulerDeg);
-    }
-    return pose;
+    return "t=" + formatVec3(t.translation) + " r=" +
+           formatVec3(t.rotationEulerDeg) + " s=" + scale;
 }
 
 /// One complete cfg pair line: `model = image [| pose]`.
 std::string formatPairLine(const std::string& modelName,
-                           const std::string& imageName, const Transform& origin,
-                           const Transform& t) {
+                           const std::string& imageName, const Transform& t) {
     std::string line = modelName + " = " + imageName;
-    if (const std::string pose = formatPose(origin, t); !pose.empty()) {
+    if (const std::string pose = formatPose(t); !pose.empty()) {
         line += " | " + pose;
     }
     return line;
@@ -332,10 +310,8 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
             const Id assignmentId = store_->assign(modelId, imageId);
             ++report.assignmentsCreated;
             if (!poseSpec.empty()) {
-                const PoseSpec pose =
-                    parsePose(poseSpec, lineNo, report.warnings);
-                store_->setTransform(assignmentId, pose.transform);
-                store_->setOrigin(assignmentId, pose.origin);
+                store_->setTransform(
+                    assignmentId, parsePose(poseSpec, lineNo, report.warnings));
             }
         }
     }
@@ -370,7 +346,6 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
         const Assignment* instance = store_->assignment(aid);
         if (instance && instance->imageId == assignment->imageId) {
             newLines.push_back(formatPairLine(model->name, image->name,
-                                              instance->origin,
                                               instance->transform));
         }
     }
@@ -552,8 +527,8 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
                 "' could not be saved (its files are not in the library)");
             continue;
         }
-        pairLines[pairKey(model->name, image->name)].push_back(formatPairLine(
-            model->name, image->name, a->origin, a->transform));
+        pairLines[pairKey(model->name, image->name)].push_back(
+            formatPairLine(model->name, image->name, a->transform));
         ++assignmentLineCount;
     }
     result.assignmentsSaved = assignmentLineCount;

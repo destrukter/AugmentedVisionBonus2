@@ -268,52 +268,6 @@ static void test_persisted_pose_survives_reload() {
     CHECK(restored->scale.isApprox(pose.scale, 1e-4f));
 }
 
-static void test_persisted_origin_survives_reload() {
-    TempLibrary lib;
-    lib.addImage("dragon.png");
-    lib.addModel("dragon.fbx");
-    lib.writeCfg("dragon.fbx = dragon.png\n");
-
-    auto store = std::make_shared<DataStore>();
-    AssetLibrary loader(store, stubValidator);
-    loader.load(lib.root.string());
-    const auto aid = store->findAssignment(modelByName(*store, "dragon.fbx"),
-                                           imageByName(*store, "dragon.png"));
-    CHECK(aid.has_value());
-
-    // "Set origin here": a rigid origin plus a scale-only editable transform.
-    Transform origin;
-    origin.translation = Eigen::Vector3f(0.1f, 0.2f, 0.3f);
-    origin.rotationEulerDeg = Eigen::Vector3f(0.0f, 35.0f, -10.0f);
-    Transform pose;
-    pose.scale = Eigen::Vector3f(2.0f, 2.0f, 2.0f);
-    store->setOrigin(*aid, origin);
-    store->setTransform(*aid, pose);
-    CHECK(loader.persistAssignment(lib.root.string(), *aid));
-
-    std::ifstream cfg((lib.root / "assignments.cfg").string());
-    std::string contents((std::istreambuf_iterator<char>(cfg)),
-                         std::istreambuf_iterator<char>());
-    CHECK(contents.find("ot=") != std::string::npos);
-    CHECK(contents.find("or=") != std::string::npos);
-
-    // Fresh store: both the origin and the transform are restored.
-    auto store2 = std::make_shared<DataStore>();
-    AssetLibrary loader2(store2, stubValidator);
-    const AssetLibrary::Report report2 = loader2.load(lib.root.string());
-    CHECK(report2.warnings.empty());
-    const auto aid2 =
-        store2->findAssignment(modelByName(*store2, "dragon.fbx"),
-                               imageByName(*store2, "dragon.png"));
-    CHECK(aid2.has_value());
-    const auto restoredOrigin = store2->origin(*aid2);
-    CHECK(restoredOrigin.has_value());
-    CHECK(restoredOrigin->translation.isApprox(origin.translation, 1e-4f));
-    CHECK(restoredOrigin->rotationEulerDeg.isApprox(origin.rotationEulerDeg,
-                                                    1e-4f));
-    CHECK(store2->transform(*aid2)->scale.isApprox(pose.scale, 1e-4f));
-}
-
 static void test_duplicate_pair_lines_create_instances() {
     TempLibrary lib;
     lib.addImage("dragon.png");
@@ -559,7 +513,6 @@ void run_assetlibrary_tests() {
     test_cfg_pose_partial_and_missing_defaults();
     test_cfg_pose_malformed_tokens_warn_and_default();
     test_persisted_pose_survives_reload();
-    test_persisted_origin_survives_reload();
     test_duplicate_pair_lines_create_instances();
     test_persist_identity_writes_bare_pair();
     test_persist_rejects_non_library_assets();

@@ -50,9 +50,6 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
     own pose).
   - `unassign(...)` reverts; `reassignImage(...)` moves an assignment.
   - `setTransform(assignment, t)` is what the Configure window's Save calls.
-  - `setOrigin(assignment, o)` stores the rigid base pose written by the
-    Configure window's "Set origin here"; a model's full pose relative to its
-    image is `origin * transform`.
   - `imageRevision()` is a monotonic counter bumped on any image-set change;
     the Camera window uses it to know exactly when to rebuild tracker targets
     (comparing counts would miss a remove+add between two frames).
@@ -66,8 +63,7 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
   line places the model on the image once per line (each instance with its
   own pose, in file order). Pair
   lines carry optional pose columns (`| t=x,y,z r=x,y,z s=v` or `s=x,y,z`,
-  plus `ot=x,y,z or=x,y,z` for the pose's origin; each part defaulting to
-  identity when omitted); `persistAssignment()` writes a saved
+  each part defaulting to identity when omitted); `persistAssignment()` writes a saved
   pose back into the cfg surgically (other lines and comments are preserved),
   which the Configure window's Save triggers for library assets - poses
   therefore survive restarts. `saveSession()` (the Upload window's "Save
@@ -101,10 +97,8 @@ library with no UI dependencies, so CI can run it headless.
   models (ConfigurePreview's off-screen render as the background) with the
   ImGuizmo translate/rotate/scale gizmo on the selected model, sharing one
   camera so the handles line up with the rendered pixels; right-drag orbits,
-  the wheel zooms. "Set origin here" folds the selected model's current
-  translation/rotation into the assignment's persistent origin (the model
-  stays put, the editable values read zero; "fold back" undoes it). Falls
-  back to a schematic plane + proxy cube when the render is unavailable.
+  the wheel zooms. Falls back to a schematic plane + proxy cube when the
+  render is unavailable.
 - `CameraWindow` — pairs the newest captured frame with the newest tracking
   result, drives the OGRE composite and displays it **letterboxed** (uniform
   scale, never stretched). Shows capture/tracking FPS, tracked-target count
@@ -276,15 +270,15 @@ cannot warp what the tracker sees.
 2. **Configure**: clicking a picture's *Configure* button calls
    `onConfigure(imageId)` → `ConfigureWindow::openImage`. The dropdown picks
    one of the image's models; dragging the gizmo (or the numeric fields)
-   changes that model's working copy; *Save* calls `store->setTransform` +
-   `store->setOrigin` for every modified model.
+   changes that model's working copy; *Save* calls `store->setTransform` for
+   every modified model.
 3. **Render**: each frame the Camera window takes the newest captured frame and
    the newest smoothed detections, and for each detected image looks up
    `store->assignmentsForImage(imageId)` and renders each model at
-   `detection.poseInCamera * origin.toMatrix() * transform.toMatrix()`. When
-   nothing is tracked but assignments exist, the window renders the first
-   assigned model at a fixed preview pose so the 3D pipeline is visible;
-   toggle this with the "Preview model when untracked" checkbox.
+   `detection.poseInCamera * assignment.transform.toMatrix()`. When nothing is
+   tracked but assignments exist, the window renders the first assigned model
+   at a fixed preview pose so the 3D pipeline is visible; toggle this with the
+   "Preview model when untracked" checkbox.
 
 ## Build notes
 

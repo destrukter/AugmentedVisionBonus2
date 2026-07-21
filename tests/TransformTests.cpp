@@ -53,7 +53,7 @@ static void test_from_matrix_round_trip() {
 
 static void test_from_matrix_of_composed_rigid_poses() {
     // Composing two rigid (translation+rotation) poses stays rigid, so
-    // fromMatrix must recover it with scale 1 - the "Set origin here" fold.
+    // fromMatrix must recover it with scale 1.
     Transform a;
     a.translation = Eigen::Vector3f(1.0f, 2.0f, 3.0f);
     a.rotationEulerDeg = Eigen::Vector3f(0.0f, 90.0f, 0.0f);

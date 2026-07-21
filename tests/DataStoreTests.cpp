@@ -104,31 +104,6 @@ static void test_set_transform_persists() {
     CHECK(!read->isIdentity());
 }
 
-static void test_set_origin_persists() {
-    DataStore store;
-    const Id model = store.addModel("m.fbx");
-    const Id img = store.addImage("1.png");
-    const Id a = store.assign(model, img);
-
-    // Defaults to identity; unknown ids are rejected.
-    CHECK(store.origin(a).has_value());
-    CHECK(store.origin(a)->isIdentity());
-    CHECK(!store.origin(/*unknown*/ 999).has_value());
-    CHECK(!store.setOrigin(/*unknown*/ 999, Transform{}));
-
-    Transform o;
-    o.translation = Eigen::Vector3f(0.5f, -0.5f, 0.0f);
-    o.rotationEulerDeg = Eigen::Vector3f(0.0f, 45.0f, 0.0f);
-    CHECK(store.setOrigin(a, o));
-    const auto read = store.origin(a);
-    CHECK(read.has_value());
-    CHECK(read->translation.isApprox(o.translation));
-    CHECK(read->rotationEulerDeg.isApprox(o.rotationEulerDeg));
-
-    // Origin and transform are independent fields.
-    CHECK(store.transform(a)->isIdentity());
-}
-
 static void test_removing_image_drops_assignments() {
     DataStore store;
     const Id model = store.addModel("m.fbx");
@@ -176,7 +151,6 @@ void run_datastore_tests() {
     test_assign_same_pair_creates_instances();
     test_revert_and_reassign();
     test_set_transform_persists();
-    test_set_origin_persists();
     test_removing_image_drops_assignments();
     test_assign_unknown_ids_fails();
     test_image_revision_tracks_image_changes();

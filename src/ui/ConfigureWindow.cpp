@@ -145,8 +145,7 @@ void ConfigureWindow::updatePreviewRender() {
             continue;
         }
         const WorkingState& w = workingFor(aid);
-        models.push_back(
-            {a->modelId, w.origin.toMatrix() * w.transform.toMatrix()});
+        models.push_back({a->modelId, w.transform.toMatrix()});
     }
     previewValid_ = preview_->render(activeImage_, models, eyePosition(),
                                      kViewportFovYDeg, canvasW_, canvasH_);
@@ -192,9 +191,6 @@ ConfigureWindow::WorkingState& ConfigureWindow::workingFor(Id assignmentId) {
     WorkingState w;
     if (const auto t = store_->transform(assignmentId)) {
         w.transform = *t;
-    }
-    if (const auto o = store_->origin(assignmentId)) {
-        w.origin = *o;
     }
     return working_.emplace(assignmentId, w).first->second;
 }
@@ -300,33 +296,8 @@ void ConfigureWindow::drawUi() {
                                  0.01f, 0.001f, 1000.0f);
     w->dirty = w->dirty || changed;
 
-    if (!w->origin.isIdentity()) {
-        ImGui::TextDisabled("Origin: t=(%.3f, %.3f, %.3f)  r=(%.1f, %.1f, %.1f)",
-                            w->origin.translation.x(),
-                            w->origin.translation.y(),
-                            w->origin.translation.z(),
-                            w->origin.rotationEulerDeg.x(),
-                            w->origin.rotationEulerDeg.y(),
-                            w->origin.rotationEulerDeg.z());
-        ImGui::SameLine();
-        if (ImGui::SmallButton("fold back")) {
-            // Undo of "Set origin here": move the origin back into the
-            // editable values. The model does not move.
-            w->transform = Transform::fromMatrix(w->origin.toMatrix() *
-                                                 w->transform.toMatrix());
-            w->origin = Transform{};
-            w->dirty = true;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "Moves the origin back into the translation/rotation fields "
-                "(the model stays where it is).");
-        }
-    }
-
     ImGui::TextDisabled("Model matrix preview");
-    const Eigen::Matrix4f preview =
-        w->origin.toMatrix() * w->transform.toMatrix();
+    const Eigen::Matrix4f preview = w->transform.toMatrix();
     for (int r = 0; r < 4; ++r) {
         ImGui::Text("% .3f  % .3f  % .3f  % .3f", preview(r, 0), preview(r, 1),
                     preview(r, 2), preview(r, 3));
@@ -343,16 +314,6 @@ void ConfigureWindow::drawUi() {
             ImGui::End();
             return;
         }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Set origin here")) {
-        setOriginToCurrent();
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "Makes the model's current position/rotation its new origin: the "
-            "model stays put, translation and rotation reset to 0, and "
-            "further edits are relative to this origin.");
     }
     ImGui::SameLine();
     // The ##op suffixes keep these IDs distinct from the identically-labelled
@@ -449,18 +410,11 @@ void ConfigureWindow::drawGizmoViewport(WorkingState* selected) {
         kViewportFovYDeg * kDegToRad, canvasSize.x / canvasSize.y, 0.05f, 100.0f);
     const Eigen::Matrix4f viewProj = proj * view;
 
-    // The gizmo manipulates the selected model's editable transform in the
-    // *origin's* frame: the origin matrix is folded into the view matrix
-    // passed to ImGuizmo below, so after "Set origin here" the handle sits on
-    // the model (which IS the new origin at that moment), the translate
-    // arrows align with the origin's axes, and dragging one arrow changes
-    // exactly one translation field. Keep manipulating one cached matrix for
-    // the whole drag instead of rebuilding it from the decomposed Euler
-    // angles every frame: Euler decomposition is not unique, and feeding a
-    // re-decomposed matrix back into an active drag makes the handles snap
-    // at representation boundaries.
-    const Eigen::Matrix4f originMatrix =
-        selected ? selected->origin.toMatrix() : Eigen::Matrix4f::Identity();
+    // Keep manipulating one cached matrix for the whole drag instead of
+    // rebuilding it from the decomposed Euler angles every frame: Euler
+    // decomposition is not unique, and feeding a re-decomposed matrix back
+    // into an active drag makes the handles snap at representation
+    // boundaries.
     if (!ImGuizmo::IsUsing()) {
         if (selected) {
             gizmoMatrix_ = selected->transform.toMatrix();
@@ -506,39 +460,8 @@ void ConfigureWindow::drawGizmoViewport(WorkingState* selected) {
         }
         // The model proxy reflects the live matrix, so scale edits show.
         if (selected) {
-            drawModelProxy(drawList, viewProj, originMatrix * gizmoMatrix_,
-                           canvasPos, canvasSize);
-        }
-    }
-
-    // Mark the origin while one is set: an axes triad (X red, Y green,
-    // Z blue) at the origin pose, so the reference point "Set origin here"
-    // created stays visible when the model is later moved away from it. The
-    // gizmo handle itself always follows the model.
-    if (selected && !selected->origin.isIdentity()) {
-        constexpr float kAxisLen = 0.15f;
-        const Eigen::Vector3f o = originMatrix.block<3, 1>(0, 3);
-        const Eigen::Vector3f axes[3] = {
-            (originMatrix * Eigen::Vector4f(kAxisLen, 0, 0, 1)).head<3>(),
-            (originMatrix * Eigen::Vector4f(0, kAxisLen, 0, 1)).head<3>(),
-            (originMatrix * Eigen::Vector4f(0, 0, kAxisLen, 1)).head<3>()};
-        static constexpr ImU32 kAxisColors[3] = {
-            IM_COL32(230, 90, 90, 230), IM_COL32(90, 210, 90, 230),
-            IM_COL32(90, 130, 230, 230)};
-        ImVec2 screenOrigin;
-        if (projectToScreen(viewProj, o, canvasPos, canvasSize, screenOrigin)) {
-            for (int i = 0; i < 3; ++i) {
-                ImVec2 screenEnd;
-                if (projectToScreen(viewProj, axes[i], canvasPos, canvasSize,
-                                    screenEnd)) {
-                    drawList->AddLine(screenOrigin, screenEnd, kAxisColors[i],
-                                      2.0f);
-                }
-            }
-            drawList->AddCircleFilled(screenOrigin, 3.5f,
-                                      IM_COL32(255, 255, 255, 230));
-            drawList->AddText(ImVec2(screenOrigin.x + 6.0f, screenOrigin.y - 16.0f),
-                              IM_COL32(255, 255, 255, 200), "origin");
+            drawModelProxy(drawList, viewProj, gizmoMatrix_, canvasPos,
+                           canvasSize);
         }
     }
 
@@ -551,8 +474,7 @@ void ConfigureWindow::drawGizmoViewport(WorkingState* selected) {
     ImGuizmo::SetRect(canvasPos.x, canvasPos.y, canvasSize.x, canvasSize.y);
 
     ImGuizmo::OPERATION op = ImGuizmo::TRANSLATE;
-    // Translation happens along the parent frame's axes - the assignment's
-    // origin frame, which is the image plane until "Set origin here" is used;
+    // Translation happens along the image plane's axes (the parent frame);
     // rotation/scale act in the model's local frame.
     ImGuizmo::MODE mode = ImGuizmo::WORLD;
     if (gizmoOperation_ == 1) {
@@ -563,12 +485,7 @@ void ConfigureWindow::drawGizmoViewport(WorkingState* selected) {
         mode = ImGuizmo::LOCAL; // ImGuizmo scales locally regardless
     }
 
-    // Composing the (rigid) origin into the view matrix makes ImGuizmo
-    // operate entirely in the origin's frame while the handles still render
-    // at the model's on-screen position (view * origin * transform is the
-    // same clip-space pose as before).
-    const Eigen::Matrix4f gizmoView = view * originMatrix;
-    if (ImGuizmo::Manipulate(gizmoView.data(), proj.data(), op, mode,
+    if (ImGuizmo::Manipulate(view.data(), proj.data(), op, mode,
                              gizmoMatrix_.data())) {
         selected->transform = Transform::fromMatrix(gizmoMatrix_);
         selected->dirty = true;
@@ -581,8 +498,7 @@ void ConfigureWindow::save() {
         if (it == working_.end() || !it->second.dirty) {
             continue;
         }
-        if (store_->setTransform(aid, it->second.transform) &&
-            store_->setOrigin(aid, it->second.origin)) {
+        if (store_->setTransform(aid, it->second.transform)) {
             it->second.dirty = false;
             if (onSaved_) {
                 onSaved_(aid);
@@ -593,27 +509,6 @@ void ConfigureWindow::save() {
 
 void ConfigureWindow::revert() {
     working_.clear(); // reloaded lazily from the store
-}
-
-void ConfigureWindow::setOriginToCurrent() {
-    WorkingState* w = selectedWorking();
-    if (!w) {
-        return;
-    }
-    Transform rigid;
-    rigid.translation = w->transform.translation;
-    rigid.rotationEulerDeg = w->transform.rotationEulerDeg;
-    if (rigid.isIdentity()) {
-        return; // nothing to fold
-    }
-    // Fold the current translation/rotation into the origin; the model's full
-    // pose (origin * transform) is unchanged, but the editable values now
-    // read zero. Scale stays in the editable transform.
-    w->origin = Transform::fromMatrix(w->origin.toMatrix() * rigid.toMatrix());
-    w->origin.scale = Eigen::Vector3f::Ones(); // rigid by construction
-    w->transform.translation.setZero();
-    w->transform.rotationEulerDeg.setZero();
-    w->dirty = true;
 }
 
 } // namespace avb
