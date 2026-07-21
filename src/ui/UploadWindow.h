@@ -13,7 +13,7 @@ class DataStore;
 /// Upload window (window 1 of 3).
 ///
 /// Responsibilities:
-///   * Upload images and FBX models (file pickers).
+///   * Upload images and 3D models - FBX or OBJ (file pickers).
 ///   * Assign a model to an image; one model may be assigned to many images.
 ///   * Revert (unassign) and re-assign differently.
 ///   * Offer one "Configure" button per picture that hands the image off to
@@ -38,7 +38,7 @@ protected:
     void drawUi() override;
 
 private:
-    void drawUploadSection();      ///< Buttons to import images / FBX models.
+    void drawUploadSection();      ///< Buttons to import images / 3D models.
     void drawAssignmentSection();  ///< Image+model matrix with assign/revert.
 
     void uploadImage(const std::string& path);

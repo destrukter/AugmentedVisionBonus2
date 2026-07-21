@@ -55,7 +55,8 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
     (comparing counts would miss a remove+add between two frames).
 
 - `AssetLibrary` — loads the default asset folder (`assets/library`, or
-  `AVB_LIBRARY_DIR`) into the store at startup: images and FBX models are
+  `AVB_LIBRARY_DIR`) into the store at startup: images and 3D models (FBX or
+  OBJ) are
   validated like manual uploads, and assignments come exclusively from
   explicit `model.fbx = image.png` pairs in `assignments.cfg` (there is no
   automatic name-based pairing; legacy `!` exclusion lines from when there
@@ -71,7 +72,7 @@ The single source of truth, shared by all windows as a `std::shared_ptr`.
   externally-uploaded files are copied in (store re-pointed at the copies),
   files of removed assets are moved to `<root>/removed/`, and the cfg is
   rewritten to exactly the current assignments - stale lines dropped, so
-  removals survive restarts too. The FBX
+  removals survive restarts too. The model-validation
   check is injected as a callback so the storage layer stays free of render
   dependencies (the app passes `ModelLoader::validateModelFile`).
 
@@ -170,14 +171,18 @@ library with no UI dependencies, so CI can run it headless.
   transform) into an off-screen target. Shares the scene manager with
   SceneRenderer; the two renders are isolated per viewport with visibility
   masks (`kMainSceneVisibilityMask` / `kConfigPreviewVisibilityMask`).
-- `ModelLoader` — imports FBX via Assimp and builds a cached `Ogre::Mesh` from
+- `ModelLoader` — imports model files (FBX, OBJ, and anything else Assimp
+  reads) and builds a cached `Ogre::Mesh` from
   an `Ogre::ManualObject` (positions/normals/UVs/vertex colors/indices),
   carrying the file's materials along: per-submesh diffuse/specular/emissive
-  colors, shininess, two-sidedness and diffuse textures - both embedded (FBX)
-  and external image files (resolved next to the model), decoded through
+  colors, shininess, two-sidedness and diffuse textures - both embedded (as in
+  FBX) and external image files (resolved next to the model, e.g. an OBJ's
+  `.mtl` textures), decoded through
   OpenCV so no OGRE codec plugin is needed. Submeshes without a usable
-  material fall back to a shared default. OGRE has no native FBX importer.
-  **Animations** come along too: when the file animates, the whole node
+  material fall back to a shared default. OGRE has no native importer for
+  these formats.
+  **Animations** come along too: when the file animates (FBX and other rigged
+  formats; OBJ has none), the whole node
   hierarchy is mirrored into an `Ogre::Skeleton` (one bone per node, node
   transforms baked into the vertices as bind pose) and every `aiAnimation`
   becomes a skeletal animation (assimp keys replace a node's local transform;
@@ -186,8 +191,8 @@ library with no UI dependencies, so CI can run it headless.
   bind rigidly (weight 1) to their node's bone, so plain node-transform
   animations play as well. Only OGRE's CPU-side resource managers are
   touched, so the import is unit-tested headless (`avb_model_tests`
-  round-trips a generated animated FBX). Also provides the static
-  `validateModelFile()` used by the Upload window.
+  round-trips a generated animated FBX and a static OBJ). Also provides the
+  static `validateModelFile()` used by the Upload window.
 - `SceneRenderer` — renders the assigned models (over a transparent background)
   into an off-screen render texture, reads the RGBA result back to the CPU, and
   composites it over the camera frame. Models are kept in per-model instance

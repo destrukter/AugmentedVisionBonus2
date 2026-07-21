@@ -80,13 +80,14 @@ void UploadWindow::drawUploadSection() {
         }
     }
 
-    ImGui::InputTextWithHint("##fbxpath", "optional: paste a path, or leave empty to browse",
+    ImGui::InputTextWithHint("##modelpath", "optional: paste a path, or leave empty to browse",
                              modelPathBuf_, sizeof(modelPathBuf_));
     ImGui::SameLine();
-    if (ImGui::Button("Add FBX model...")) {
+    if (ImGui::Button("Add 3D model...")) {
         std::string path = modelPathBuf_;
         if (path.empty()) {
-            path = pickFile("FBX models", "fbx");
+            // NFD takes a comma-separated extension list for one filter entry.
+            path = pickFile("3D models", "fbx,obj");
         }
         if (!path.empty()) {
             uploadModel(path);
@@ -147,7 +148,7 @@ void UploadWindow::drawUploadSection() {
 
     ImGui::NextColumn();
 
-    ImGui::TextDisabled("FBX models");
+    ImGui::TextDisabled("3D models");
     for (const Id id : store_->modelIds()) {
         const ModelAsset* model = store_->model(id);
         if (!model) {

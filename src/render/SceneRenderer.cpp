@@ -182,7 +182,7 @@ SceneRenderer::ModelInstance* SceneRenderer::ensureFirstInstance(Id modelId) {
         return nullptr;
     }
     const std::string meshName = "avb/mesh/" + std::to_string(modelId);
-    const std::string mesh = loader_->loadFbx(model->filePath, meshName);
+    const std::string mesh = loader_->loadModel(model->filePath, meshName);
     if (mesh.empty()) {
         return nullptr;
     }

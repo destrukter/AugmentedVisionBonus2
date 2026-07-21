@@ -253,7 +253,7 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
     }
 
     // Models: validated through the injected checker (Assimp in the app).
-    for (const fs::path& file : listFiles(root / "models", {".fbx"})) {
+    for (const fs::path& file : listFiles(root / "models", {".fbx", ".obj"})) {
         std::string error;
         if (validateModel_ && !validateModel_(file.string(), &error)) {
             report.warnings.push_back("model '" + file.filename().string() +
@@ -451,7 +451,7 @@ AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
         }
     };
     moveRemoved("images", {".png", ".jpg", ".jpeg", ".bmp"}, imageNames);
-    moveRemoved("models", {".fbx"}, modelNames);
+    moveRemoved("models", {".fbx", ".obj"}, modelNames);
 
     // ---- 2. Copy external files into the library.
     // Copies `filePath` (named `name`) into the library subfolder unless a

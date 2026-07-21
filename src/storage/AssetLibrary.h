@@ -18,7 +18,7 @@ class DataStore;
 /// with the AVB_LIBRARY_DIR environment variable):
 ///
 ///     <root>/images/          tracked images (*.png *.jpg *.jpeg *.bmp)
-///     <root>/models/          FBX models (*.fbx)
+///     <root>/models/          3D models (*.fbx *.obj)
 ///     <root>/assignments.cfg  optional model->image pairs (see below)
 ///
 /// Assignments are resolved **by file name** from explicit pairs in

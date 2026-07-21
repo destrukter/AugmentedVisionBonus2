@@ -24,7 +24,7 @@ The application opens **three independent OS windows at the same time**, all bac
 by one shared in-memory data store (see `src/storage`).
 
 1. **Upload window** (`src/ui/UploadWindow`)
-   - Upload images and FBX models. Uploads are validated immediately and the
+   - Upload images and 3D models (FBX or OBJ). Uploads are validated immediately and the
      outcome (success / warning / error) is shown in the window — a broken
      image or model file is rejected with a reason, and images with too few
      trackable features get a warning.
@@ -72,10 +72,11 @@ by one shared in-memory data store (see `src/storage`).
      /dev/video* with driver names); Reconnect reopens it after replugging.
    - Capture and tracking run on background threads, so the feed stays smooth
      regardless of detection cost, and the newest frame is always shown.
-   - When a tracked image is detected, the FBX models assigned to it are rendered
+   - When a tracked image is detected, the models assigned to it are rendered
      (OGRE3D) at their configured pose — with their own materials: colors,
-     shininess, vertex colors and diffuse textures (embedded in the FBX or
-     referenced image files next to it). Animated FBX files play their
+     shininess, vertex colors and diffuse textures (embedded in the model or
+     referenced image files next to it — e.g. an OBJ's `.mtl` textures).
+     Animated FBX files play their
      animation (skeletal or plain node animation) while rendered. The feed is
      displayed letterboxed — resizing the window never warps the image or
      affects tracking.
@@ -88,7 +89,7 @@ starts, with the same validation as manual uploads:
 ```
 assets/library/
 ├── images/           # tracked images (*.png *.jpg *.jpeg *.bmp)
-├── models/           # FBX models (*.fbx)
+├── models/           # 3D models (*.fbx *.obj)
 └── assignments.cfg   # optional model -> image pairs
 ```
 

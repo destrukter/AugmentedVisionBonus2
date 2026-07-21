@@ -124,14 +124,17 @@ aiScene* buildScene(bool animated) {
     return scene;
 }
 
-/// Exports `scene` as a real binary FBX file and returns its path, or "" on
-/// failure - so the tests exercise exactly the format users upload. (Assimp's
-/// FBX exporter may resample animation keys, but preserves targets/length.)
-std::string writeFixture(bool animated, const std::string& name) {
+/// Exports `scene` in a real file of Assimp export format `formatId` (with
+/// file extension `ext`) and returns its path, or "" on failure - so the
+/// tests exercise exactly the formats users upload. (Assimp's FBX exporter
+/// may resample animation keys, but preserves targets/length.)
+std::string writeFixture(bool animated, const std::string& name,
+                         const char* formatId, const char* ext) {
     aiScene* scene = buildScene(animated);
-    const fs::path path = fs::temp_directory_path() / (name + ".fbx");
+    const fs::path path =
+        fs::temp_directory_path() / (name + "." + ext);
     Assimp::Exporter exporter;
-    const aiReturn rc = exporter.Export(scene, "fbx", path.string());
+    const aiReturn rc = exporter.Export(scene, formatId, path.string());
     delete scene;
     if (rc != aiReturn_SUCCESS) {
         std::printf("FAIL: could not export test fixture %s: %s\n",
@@ -144,14 +147,15 @@ std::string writeFixture(bool animated, const std::string& name) {
 } // namespace
 
 static void test_animated_model_gets_skeleton_and_animation() {
-    const std::string file = writeFixture(/*animated=*/true, "avb_anim_fixture");
+    const std::string file =
+        writeFixture(/*animated=*/true, "avb_anim_fixture", "fbx", "fbx");
     CHECK(!file.empty());
     if (file.empty()) {
         return;
     }
 
     ModelLoader loader;
-    const std::string meshName = loader.loadFbx(file, "test/animated");
+    const std::string meshName = loader.loadModel(file, "test/animated");
     CHECK(meshName == "test/animated");
     if (meshName.empty()) {
         return;
@@ -186,14 +190,15 @@ static void test_animated_model_gets_skeleton_and_animation() {
 }
 
 static void test_static_model_loads_without_skeleton() {
-    const std::string file = writeFixture(/*animated=*/false, "avb_static_fixture");
+    const std::string file =
+        writeFixture(/*animated=*/false, "avb_static_fixture", "fbx", "fbx");
     CHECK(!file.empty());
     if (file.empty()) {
         return;
     }
 
     ModelLoader loader;
-    const std::string meshName = loader.loadFbx(file, "test/static");
+    const std::string meshName = loader.loadModel(file, "test/static");
     CHECK(meshName == "test/static");
     if (meshName.empty()) {
         return;
@@ -216,8 +221,41 @@ static void test_static_model_loads_without_skeleton() {
     CHECK(box.getMaximum().x < 3.5f);
 }
 
+// An .obj file (no rig, no animation) must import to a static mesh with real
+// geometry - proving the loader is not FBX-specific.
+static void test_obj_model_loads() {
+    const std::string file =
+        writeFixture(/*animated=*/false, "avb_obj_fixture", "obj", "obj");
+    CHECK(!file.empty());
+    if (file.empty()) {
+        return;
+    }
+
+    ModelLoader loader;
+    const std::string meshName = loader.loadModel(file, "test/obj");
+    CHECK(meshName == "test/obj");
+    if (meshName.empty()) {
+        return;
+    }
+
+    const Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().getByName(
+        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    CHECK(mesh != nullptr);
+    if (!mesh) {
+        return;
+    }
+    CHECK(mesh->getNumSubMeshes() >= 1);
+    CHECK(!mesh->hasSkeleton()); // OBJ carries no rig
+    const Ogre::AxisAlignedBox& box = mesh->getBounds();
+    CHECK(!box.isNull());
+
+    // validateModelFile accepts it too (the upload-time gate).
+    CHECK(ModelLoader::validateModelFile(file, nullptr));
+}
+
 void run_modelloader_tests() {
     HeadlessOgre ogre;
     test_animated_model_gets_skeleton_and_animation();
     test_static_model_loads_without_skeleton();
+    test_obj_model_loads();
 }

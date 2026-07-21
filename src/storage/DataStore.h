@@ -13,7 +13,7 @@ namespace avb {
 
 /// Central in-memory backend store shared by all three windows.
 ///
-/// Owns images, FBX models and the assignments that bind a model to an image
+/// Owns images, 3D models and the assignments that bind a model to an image
 /// together with a relative `Transform`. The class is intentionally free of any
 /// UI / rendering / vision dependency so it can be unit-tested in isolation.
 ///
@@ -51,7 +51,8 @@ public:
     std::uint64_t imageRevision() const { return imageRevision_; }
 
     // ---- Models -----------------------------------------------------------
-    /// Registers an FBX model file. `name` defaults to the file name when empty.
+    /// Registers a model file (FBX or OBJ). `name` defaults to the file name
+    /// when empty.
     Id addModel(const std::string& filePath, const std::string& name = "");
     bool removeModel(Id modelId);
     const ModelAsset* model(Id modelId) const;

@@ -372,7 +372,7 @@ void buildAnimations(const aiScene* scene, SkeletonBuild& build) {
 bool ModelLoader::validateModelFile(const std::string& filePath,
                                     std::string* error) {
     Assimp::Importer importer;
-    // Triangulate mirrors loadFbx() closely enough to predict whether it will
+    // Triangulate mirrors loadModel() closely enough to predict whether it will
     // succeed, while skipping the heavier post-processing steps.
     const aiScene* scene =
         importer.ReadFile(filePath, aiProcess_Triangulate);
@@ -523,8 +523,8 @@ void emitNodeRecursive(
 
 } // namespace
 
-std::string ModelLoader::loadFbx(const std::string& filePath,
-                                 const std::string& meshName) {
+std::string ModelLoader::loadModel(const std::string& filePath,
+                                   const std::string& meshName) {
     if (const auto it = cache_.find(filePath); it != cache_.end()) {
         return it->second;
     }
@@ -532,6 +532,7 @@ std::string ModelLoader::loadFbx(const std::string& filePath,
     Assimp::Importer importer;
     // FBX pivot preservation inserts chains of helper nodes per pivot, which
     // would multiply the skeleton's bone count for nothing this renderer uses.
+    // (Assimp applies this only to the FBX importer; other formats ignore it.)
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
     const aiScene* scene = importer.ReadFile(
         filePath, aiProcess_Triangulate | aiProcess_GenSmoothNormals |
