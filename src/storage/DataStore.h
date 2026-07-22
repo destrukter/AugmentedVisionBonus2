@@ -13,7 +13,7 @@ namespace avb {
 
 /// Central in-memory backend store shared by all three windows.
 ///
-/// Owns images, FBX models and the assignments that bind a model to an image
+/// Owns images, 3D models and the assignments that bind a model to an image
 /// together with a relative `Transform`. The class is intentionally free of any
 /// UI / rendering / vision dependency so it can be unit-tested in isolation.
 ///
@@ -38,6 +38,12 @@ public:
     const ImageAsset* image(Id imageId) const;
     std::vector<Id> imageIds() const;
 
+    /// Repoints an asset at a different file on disk (name and any decoded
+    /// pixels stay untouched). Used when the asset library copies an external
+    /// file into its folders so future pose persistence can resolve it.
+    bool setImageFilePath(Id imageId, const std::string& filePath);
+    bool setModelFilePath(Id modelId, const std::string& filePath);
+
     /// Monotonic counter bumped whenever the image set (or an image's decoded
     /// pixels) changes. Lets consumers such as the tracker's target list detect
     /// staleness cheaply and exactly - unlike comparing imageIds().size(),
@@ -45,7 +51,8 @@ public:
     std::uint64_t imageRevision() const { return imageRevision_; }
 
     // ---- Models -----------------------------------------------------------
-    /// Registers an FBX model file. `name` defaults to the file name when empty.
+    /// Registers a model file (FBX or OBJ). `name` defaults to the file name
+    /// when empty.
     Id addModel(const std::string& filePath, const std::string& name = "");
     bool removeModel(Id modelId);
     const ModelAsset* model(Id modelId) const;
@@ -53,20 +60,22 @@ public:
 
     // ---- Assignments ------------------------------------------------------
     /// Assigns `modelId` to `imageId` with a default (identity) transform.
-    /// If the pair already exists the existing assignment id is returned.
-    /// Returns kInvalidId when either id is unknown.
+    /// Every call creates a new assignment: the same model can be placed on
+    /// one image multiple times, each instance with its own pose. Returns
+    /// kInvalidId when either id is unknown.
     Id assign(Id modelId, Id imageId);
 
-    /// Reverts an assignment. Both overloads are no-ops for unknown inputs.
+    /// Reverts an assignment. Both overloads are no-ops for unknown inputs;
+    /// the (model, image) overload removes the pair's oldest instance.
     bool unassign(Id assignmentId);
     bool unassign(Id modelId, Id imageId);
 
     /// Reassigns an existing assignment to a different image, preserving its
-    /// transform. Returns false if the target pair already exists or ids are
-    /// unknown.
+    /// transform. Returns false when either id is unknown.
     bool reassignImage(Id assignmentId, Id newImageId);
 
     const Assignment* assignment(Id assignmentId) const;
+    /// The oldest assignment of the (model, image) pair, if any exists.
     std::optional<Id> findAssignment(Id modelId, Id imageId) const;
 
     /// All assignments for a given image (used by the Camera window to know

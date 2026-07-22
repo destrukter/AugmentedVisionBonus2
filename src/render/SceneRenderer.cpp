@@ -7,6 +7,7 @@
 #include <Eigen/Geometry>
 #include <opencv2/imgproc.hpp>
 
+#include <OgreAnimationState.h>
 #include <OgreCamera.h>
 #include <OgreEntity.h>
 #include <OgreHardwarePixelBuffer.h>
@@ -26,6 +27,28 @@
 #include "vision/ImageTracker.h"
 
 namespace avb {
+
+namespace {
+
+/// Enables the entity's first animation (looping) and returns its state, or
+/// null when the mesh carries no animations. Playing the first animation
+/// automatically means an animated FBX moves without any configuration.
+Ogre::AnimationState* enableFirstAnimation(Ogre::Entity* entity) {
+    Ogre::AnimationStateSet* states = entity->getAllAnimationStates();
+    if (!states) {
+        return nullptr;
+    }
+    auto it = states->getAnimationStateIterator();
+    if (!it.hasMoreElements()) {
+        return nullptr;
+    }
+    Ogre::AnimationState* state = it.getNext();
+    state->setEnabled(true);
+    state->setLoop(true);
+    return state;
+}
+
+} // namespace
 
 SceneRenderer::SceneRenderer(std::shared_ptr<OgreContext> context,
                              std::shared_ptr<ModelLoader> loader,
@@ -90,7 +113,10 @@ bool SceneRenderer::createRenderTarget(int width, int height) {
     height_ = height;
     renderTarget_ = rtt->getBuffer()->getRenderTarget();
     Ogre::Viewport* vp = renderTarget_->addViewport(camera_);
-    vp->setBackgroundColour(Ogre::ColourValue(0, 0, 0, 0)); // transparent
+    // Clear to the exact chroma-key color the compositor tests for (bytes
+    // R=1, G=0, B=255) - a color lit geometry essentially never produces, so
+    // even pure-black materials survive compositing. See endFrame().
+    vp->setBackgroundColour(Ogre::ColourValue(1.0f / 255.0f, 0.0f, 1.0f, 0.0f));
     vp->setClearEveryFrame(true);
     vp->setOverlaysEnabled(false);
     // Route this viewport's material lookups through the RTSS scheme so
@@ -101,6 +127,9 @@ bool SceneRenderer::createRenderTarget(int width, int height) {
     // no fixed-function pipeline - can actually draw, so geometry renders
     // invisibly.
     vp->setMaterialScheme(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
+    // Render only the AR scene; the Configure window's preview objects share
+    // the scene manager but carry a different visibility flag.
+    vp->setVisibilityMask(kMainSceneVisibilityMask);
     renderTarget_->setAutoUpdated(false);
 
     readback_.assign(static_cast<size_t>(width_) * height_ * 4, 0);
@@ -134,38 +163,73 @@ void SceneRenderer::beginFrame(const cv::Mat& cameraFrame) {
         (cameraFrame.cols != width_ || cameraFrame.rows != height_)) {
         createRenderTarget(cameraFrame.cols, cameraFrame.rows);
     }
-    for (auto& [id, node] : nodes_) {
-        node->setVisible(false);
+    for (auto& [id, pool] : pools_) {
+        for (ModelInstance& instance : pool.instances) {
+            instance.node->setVisible(false);
+        }
+        pool.used = 0;
     }
     visibleModels_ = 0;
 }
 
-Ogre::SceneNode* SceneRenderer::ensureNode(Id modelId) {
-    if (const auto it = nodes_.find(modelId); it != nodes_.end()) {
-        return it->second;
+SceneRenderer::ModelInstance* SceneRenderer::ensureFirstInstance(Id modelId) {
+    InstancePool& pool = pools_[modelId];
+    if (!pool.instances.empty()) {
+        return &pool.instances.front();
     }
     const ModelAsset* model = store_->model(modelId);
     if (!model) {
         return nullptr;
     }
     const std::string meshName = "avb/mesh/" + std::to_string(modelId);
-    const std::string mesh = loader_->loadFbx(model->filePath, meshName);
+    const std::string mesh = loader_->loadModel(model->filePath, meshName);
     if (mesh.empty()) {
         return nullptr;
     }
     Ogre::SceneManager* sm = context_->sceneManager();
-    Ogre::Entity* entity = sm->createEntity("avb/ent/" + std::to_string(modelId), mesh);
-    Ogre::SceneNode* node = worldRoot_->createChildSceneNode();
-    node->attachObject(entity);
-    nodes_.emplace(modelId, node);
-    return node;
+    ModelInstance instance;
+    instance.entity =
+        sm->createEntity("avb/ent/" + std::to_string(modelId) + "/0", mesh);
+    instance.entity->setVisibilityFlags(kMainSceneVisibilityMask);
+    instance.animation = enableFirstAnimation(instance.entity);
+    instance.node = worldRoot_->createChildSceneNode();
+    instance.node->attachObject(instance.entity);
+    pool.instances.push_back(instance);
+    return &pool.instances.front();
+}
+
+SceneRenderer::ModelInstance* SceneRenderer::acquireInstance(Id modelId) {
+    // Creates the pool (and validates the model loads) via the first instance.
+    if (!ensureFirstInstance(modelId)) {
+        return nullptr;
+    }
+    InstancePool& pool = pools_[modelId];
+    if (pool.used < pool.instances.size()) {
+        return &pool.instances[pool.used++];
+    }
+    // Same model drawn again this frame (e.g. assigned to a second tracked
+    // image): clone another entity of the shared mesh.
+    Ogre::SceneManager* sm = context_->sceneManager();
+    ModelInstance instance;
+    instance.entity = sm->createEntity(
+        "avb/ent/" + std::to_string(modelId) + "/" +
+            std::to_string(pool.instances.size()),
+        pool.instances.front().entity->getMesh());
+    instance.entity->setVisibilityFlags(kMainSceneVisibilityMask);
+    instance.animation = enableFirstAnimation(instance.entity);
+    instance.node = worldRoot_->createChildSceneNode();
+    instance.node->attachObject(instance.entity);
+    pool.instances.push_back(instance);
+    ++pool.used;
+    return &pool.instances.back();
 }
 
 void SceneRenderer::drawModel(Id modelId, const Eigen::Matrix4f& pose) {
-    Ogre::SceneNode* node = ensureNode(modelId);
-    if (!node) {
+    ModelInstance* instance = acquireInstance(modelId);
+    if (!instance) {
         return;
     }
+    Ogre::SceneNode* node = instance->node;
     // Decompose the 4x4 pose into translation, rotation and per-axis scale.
     const Eigen::Vector3f t = pose.block<3, 1>(0, 3);
     Eigen::Matrix3f rs = pose.block<3, 3>(0, 0);
@@ -188,11 +252,11 @@ void SceneRenderer::drawModel(Id modelId, const Eigen::Matrix4f& pose) {
 bool SceneRenderer::previewFramingPose(Id modelId,
                                        const Eigen::Matrix4f& configured,
                                        float yawDeg, Eigen::Matrix4f& outPose) {
-    Ogre::SceneNode* node = ensureNode(modelId);
-    if (!node || node->numAttachedObjects() == 0) {
+    ModelInstance* instance = ensureFirstInstance(modelId);
+    if (!instance || !instance->entity) {
         return false;
     }
-    const Ogre::AxisAlignedBox& box = node->getAttachedObject(0)->getBoundingBox();
+    const Ogre::AxisAlignedBox& box = instance->entity->getBoundingBox();
     if (box.isNull() || box.isInfinite()) {
         return false;
     }
@@ -256,6 +320,19 @@ void SceneRenderer::endFrame() {
         return;
     }
 
+    // Real time elapsed since the previous frame, for animation playback.
+    // Clamped so a stall (window drag, camera hiccup) doesn't make animations
+    // leap; measured every frame so playback resumes smoothly regardless of
+    // how long no model was visible.
+    const auto now = std::chrono::steady_clock::now();
+    float animDt = 0.0f;
+    if (haveAnimTick_) {
+        animDt = std::chrono::duration<float>(now - lastAnimTick_).count();
+    }
+    lastAnimTick_ = now;
+    haveAnimTick_ = true;
+    animDt = std::min(animDt, 0.1f);
+
     // Build the RGBA background from the camera frame (BGR -> RGBA), or black.
     // beginFrame() sized the render target to the frame, so no resize is needed.
     if (composited_.empty() || composited_.rows != height_ ||
@@ -270,6 +347,17 @@ void SceneRenderer::endFrame() {
 
     if (visibleModels_ == 0 || !renderTarget_) {
         return; // nothing rendered: skip the OGRE pass and GPU readback entirely
+    }
+
+    // Advance the animations of every instance drawn this frame.
+    if (animDt > 0.0f) {
+        for (auto& [id, pool] : pools_) {
+            for (std::size_t i = 0; i < pool.used; ++i) {
+                if (pool.instances[i].animation) {
+                    pool.instances[i].animation->addTime(animDt);
+                }
+            }
+        }
     }
 
     renderTarget_->update();
@@ -292,19 +380,16 @@ void SceneRenderer::endFrame() {
 
     // Composite the rendered overlay over the camera background.
     //
-    // We key on the overlay's RGB (the clear colour) rather than its alpha
-    // channel. The off-screen render target is cleared to transparent black, but
-    // many Linux GL drivers hand the FBO's alpha channel back as fully opaque
-    // (255) everywhere through copyContentsToMemory. With a straight-alpha
-    // composite that would blend the overlay's black clear colour over the whole
-    // camera frame and blank the feed entirely. Treating pure-black overlay
-    // pixels as "nothing drawn here" keeps the camera visible wherever no model
-    // was rendered, regardless of how the driver reports alpha; rendered model
-    // pixels are lit and therefore non-black. Models are opaque, so a masked
-    // copy replaces the old per-pixel alpha blend (SIMD via OpenCV instead of
-    // a scalar loop over every pixel).
-    cv::Mat clearMask; // 255 where the overlay is pure black in RGB (any alpha)
-    cv::inRange(overlay, cv::Scalar(0, 0, 0, 0), cv::Scalar(0, 0, 0, 255),
+    // We key on the overlay's RGB (the exact clear colour set in
+    // createRenderTarget) rather than its alpha channel: many Linux GL
+    // drivers hand the FBO's alpha back as constant through
+    // copyContentsToMemory, which would either blank the feed or the models.
+    // The key colour (1, 0, 255) is one lit geometry essentially never
+    // produces exactly, so even pure-black materials composite correctly.
+    // Models are opaque, so a masked copy replaces a per-pixel alpha blend
+    // (SIMD via OpenCV instead of a scalar loop over every pixel).
+    cv::Mat clearMask; // 255 where the overlay is the key colour (any alpha)
+    cv::inRange(overlay, cv::Scalar(1, 0, 255, 0), cv::Scalar(1, 0, 255, 255),
                 clearMask);
     cv::bitwise_not(clearMask, drawnMask_);
     overlay.copyTo(composited_, drawnMask_);

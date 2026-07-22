@@ -30,6 +30,13 @@ struct Transform {
 
     /// True when this is the default (identity) pose.
     bool isIdentity() const;
+
+    /// Decomposes a translation * rotation * scale matrix (no shear) back
+    /// into a Transform - the inverse of toMatrix(). Euler angles are chosen
+    /// to reproduce the same rotation matrix (the decomposition is not unique,
+    /// but toMatrix(fromMatrix(m)) == m). Used by the Configure window's
+    /// gizmo to read a manipulated matrix back into pose values.
+    static Transform fromMatrix(const Eigen::Matrix4f& m);
 };
 
 } // namespace avb

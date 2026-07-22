@@ -92,6 +92,15 @@ bool Window::initialize() {
 }
 
 void Window::makeContextCurrent() {
+    // SDL caches which GL context it believes is current on the thread and
+    // turns SDL_GL_MakeCurrent into a no-op when it matches - but OGRE binds
+    // its own context behind SDL's back every frame (see
+    // OgreContext::makeRenderContextCurrent), so SDL's cache can claim this
+    // context is current while OGRE's really is. Clearing the binding first
+    // forces a real switch; without it, all of this window's GL calls
+    // silently land in OGRE's context and the window freezes on its last
+    // presented frame.
+    SDL_GL_MakeCurrent(sdlWindow_, nullptr);
     SDL_GL_MakeCurrent(sdlWindow_, glContext_);
     ImGui::SetCurrentContext(imguiContext_);
 }
@@ -118,6 +127,8 @@ void Window::renderFrame() {
         return;
     }
 
+    // Cache-busting double bind; see makeContextCurrent() for why.
+    SDL_GL_MakeCurrent(sdlWindow_, nullptr);
     SDL_GL_MakeCurrent(sdlWindow_, glContext_);
     ImGui::SetCurrentContext(imguiContext_);
 
@@ -135,6 +146,7 @@ void Window::renderFrame() {
     // ImGui shader program) valid only intermittently on at least one driver
     // (Mesa llvmpipe), silently failing every draw call and leaving the
     // window blank.
+    SDL_GL_MakeCurrent(sdlWindow_, nullptr);
     SDL_GL_MakeCurrent(sdlWindow_, glContext_);
     ImGui::SetCurrentContext(imguiContext_);
 

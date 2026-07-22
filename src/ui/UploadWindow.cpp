@@ -46,10 +46,12 @@ std::string pickFile(const char* filterName, const char* filterExtensions) {
 } // namespace
 
 UploadWindow::UploadWindow(std::shared_ptr<DataStore> store,
-                           ConfigureCallback onConfigure)
+                           ConfigureCallback onConfigure,
+                           SaveSessionCallback onSaveSession)
     : Window("Upload", 900, 600),
       store_(std::move(store)),
-      onConfigure_(std::move(onConfigure)) {}
+      onConfigure_(std::move(onConfigure)),
+      onSaveSession_(std::move(onSaveSession)) {}
 
 void UploadWindow::drawUi() {
     // Scrolling allowed: the asset/assignment lists have fixed-size rows and
@@ -78,18 +80,29 @@ void UploadWindow::drawUploadSection() {
         }
     }
 
-    ImGui::InputTextWithHint("##fbxpath", "optional: paste a path, or leave empty to browse",
+    ImGui::InputTextWithHint("##modelpath", "optional: paste a path, or leave empty to browse",
                              modelPathBuf_, sizeof(modelPathBuf_));
     ImGui::SameLine();
-    if (ImGui::Button("Add FBX model...")) {
+    if (ImGui::Button("Add 3D model...")) {
         std::string path = modelPathBuf_;
         if (path.empty()) {
-            path = pickFile("FBX models", "fbx");
+            // NFD takes a comma-separated extension list for one filter entry.
+            path = pickFile("3D models", "fbx,obj");
         }
         if (!path.empty()) {
             uploadModel(path);
             modelPathBuf_[0] = '\0';
         }
+    }
+
+    if (onSaveSession_) {
+        if (ImGui::Button("Save session to library")) {
+            onSaveSession_();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled(
+            "(copies external files into the library and writes all "
+            "assignments + poses to assignments.cfg)");
     }
 
     if (!statusMessage_.empty()) {
@@ -113,22 +126,50 @@ void UploadWindow::drawUploadSection() {
         if (!img) {
             continue;
         }
-        if (ImGui::Selectable(img->name.c_str(), selectedImage_ == id)) {
+        const std::string name = img->name;
+        ImGui::PushID(static_cast<int>(id));
+        if (ImGui::SmallButton("x")) {
+            // Removes the image and (cascading) its assignments; "Save
+            // session to library" syncs the removal to disk.
+            if (selectedImage_ == id) {
+                selectedImage_ = kInvalidId;
+            }
+            store_->removeImage(id);
+            setStatus(StatusKind::Success, "Removed image '" + name + "'.");
+            ImGui::PopID();
+            continue;
+        }
+        ImGui::SameLine();
+        if (ImGui::Selectable(name.c_str(), selectedImage_ == id)) {
             selectedImage_ = id;
         }
+        ImGui::PopID();
     }
 
     ImGui::NextColumn();
 
-    ImGui::TextDisabled("FBX models");
+    ImGui::TextDisabled("3D models");
     for (const Id id : store_->modelIds()) {
         const ModelAsset* model = store_->model(id);
         if (!model) {
             continue;
         }
-        if (ImGui::Selectable(model->name.c_str(), selectedModel_ == id)) {
+        const std::string name = model->name;
+        ImGui::PushID(static_cast<int>(id));
+        if (ImGui::SmallButton("x")) {
+            if (selectedModel_ == id) {
+                selectedModel_ = kInvalidId;
+            }
+            store_->removeModel(id);
+            setStatus(StatusKind::Success, "Removed model '" + name + "'.");
+            ImGui::PopID();
+            continue;
+        }
+        ImGui::SameLine();
+        if (ImGui::Selectable(name.c_str(), selectedModel_ == id)) {
             selectedModel_ = id;
         }
+        ImGui::PopID();
     }
 
     ImGui::Columns(1);
@@ -187,11 +228,14 @@ void UploadWindow::drawAssignmentSection() {
         selectedImage_ != kInvalidId && selectedModel_ != kInvalidId;
     ImGui::BeginDisabled(!canAssign);
     if (ImGui::Button("Assign selected model -> selected image")) {
-        // One model can be assigned to many images; assign() is idempotent per
-        // (model, image) pair.
+        // One model can be assigned to many images - and to the same image
+        // several times: every click adds another independent copy with its
+        // own pose.
         store_->assign(selectedModel_, selectedImage_);
     }
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("(assigning again adds another copy)");
 
     if (selectedImage_ == kInvalidId) {
         ImGui::TextDisabled("Select an image to see its assigned models.");
@@ -200,19 +244,30 @@ void UploadWindow::drawAssignmentSection() {
 
     const ImageAsset* img = store_->image(selectedImage_);
     ImGui::Text("Models on '%s':", img ? img->name.c_str() : "<image>");
+    // One Configure button per picture: the Configure window shows all of the
+    // image's models and switches between them with its own dropdown.
+    const std::vector<Id> assignments =
+        store_->assignmentsForImage(selectedImage_);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(assignments.empty());
+    if (ImGui::Button("Configure")) {
+        onConfigure_(selectedImage_); // hand the image to the Configure window
+    }
+    ImGui::EndDisabled();
+    if (assignments.empty()) {
+        ImGui::TextDisabled("(no models assigned yet)");
+    }
 
-    for (const Id aid : store_->assignmentsForImage(selectedImage_)) {
-        const Assignment* a = store_->assignment(aid);
-        if (!a) {
+    // Labels carry an instance number when the same model is assigned to the
+    // image more than once (matching the Configure window's dropdown).
+    const auto labels = assignmentDisplayLabels(*store_, assignments);
+    for (const Id aid : assignments) {
+        const auto label = labels.find(aid);
+        if (label == labels.end()) {
             continue;
         }
-        const ModelAsset* model = store_->model(a->modelId);
         ImGui::PushID(static_cast<int>(aid));
-        ImGui::BulletText("%s", model ? model->name.c_str() : "<missing>");
-        ImGui::SameLine();
-        if (ImGui::Button("Configure")) {
-            onConfigure_(aid); // hand off to the Configure window
-        }
+        ImGui::BulletText("%s", label->second.c_str());
         ImGui::SameLine();
         if (ImGui::Button("Revert")) {
             store_->unassign(aid);

@@ -13,17 +13,21 @@ class DataStore;
 /// Upload window (window 1 of 3).
 ///
 /// Responsibilities:
-///   * Upload images and FBX models (file pickers).
+///   * Upload images and 3D models - FBX or OBJ (file pickers).
 ///   * Assign a model to an image; one model may be assigned to many images.
 ///   * Revert (unassign) and re-assign differently.
-///   * Offer a "Configure" button per (model, image) assignment that hands the
-///     assignment off to the Configure window via the onConfigure callback.
+///   * Offer one "Configure" button per picture that hands the image off to
+///     the Configure window (where all its assigned models are edited) via
+///     the onConfigure callback.
 class UploadWindow : public Window {
 public:
-    /// Invoked when the user clicks "Configure" on an assignment.
-    using ConfigureCallback = std::function<void(Id assignmentId)>;
+    /// Invoked when the user clicks "Configure" on an image.
+    using ConfigureCallback = std::function<void(Id imageId)>;
+    /// Invoked when the user clicks "Save session to library".
+    using SaveSessionCallback = std::function<void()>;
 
-    UploadWindow(std::shared_ptr<DataStore> store, ConfigureCallback onConfigure);
+    UploadWindow(std::shared_ptr<DataStore> store, ConfigureCallback onConfigure,
+                 SaveSessionCallback onSaveSession = {});
 
     /// Sets the status line shown under the upload buttons. Also used by the
     /// Application to surface the startup asset-library summary.
@@ -34,7 +38,7 @@ protected:
     void drawUi() override;
 
 private:
-    void drawUploadSection();      ///< Buttons to import images / FBX models.
+    void drawUploadSection();      ///< Buttons to import images / 3D models.
     void drawAssignmentSection();  ///< Image+model matrix with assign/revert.
 
     void uploadImage(const std::string& path);
@@ -42,6 +46,7 @@ private:
 
     std::shared_ptr<DataStore> store_;
     ConfigureCallback onConfigure_;
+    SaveSessionCallback onSaveSession_;
 
     // Transient UI selection state.
     Id selectedImage_{kInvalidId};

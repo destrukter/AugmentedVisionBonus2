@@ -20,3 +20,15 @@ add_executable(avb_vision_tests
 target_link_libraries(avb_vision_tests PRIVATE avb_vision)
 
 add_test(NAME avb_vision_tests COMMAND avb_vision_tests)
+
+# Unit tests for the model import (FBX -> OGRE mesh/skeleton/animations).
+# Headless: they bootstrap OGRE's CPU-side resource managers only (no window,
+# GL context or render system) and generate their model fixtures with Assimp's
+# exporter, so they run in CI like the others.
+add_executable(avb_model_tests
+    ModelTestRunner.cpp
+    ModelLoaderTests.cpp
+)
+target_link_libraries(avb_model_tests PRIVATE avb_model)
+
+add_test(NAME avb_model_tests COMMAND avb_model_tests)

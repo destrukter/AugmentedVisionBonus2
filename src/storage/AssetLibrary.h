@@ -18,16 +18,19 @@ class DataStore;
 /// with the AVB_LIBRARY_DIR environment variable):
 ///
 ///     <root>/images/          tracked images (*.png *.jpg *.jpeg *.bmp)
-///     <root>/models/          FBX models (*.fbx)
+///     <root>/models/          3D models (*.fbx *.obj)
 ///     <root>/assignments.cfg  optional model->image pairs (see below)
 ///
-/// Assignments are resolved **by file name**, two ways:
-///  1. Explicit pairs in assignments.cfg, one per line:
-///         model-file.fbx = image-file.png
-///     (`#`-prefixed lines are comments; names are matched case-insensitively
-///     against the files found in the two folders.)
-///  2. Automatically: a model and an image sharing the same base name (stem)
-///     are paired, e.g. `dragon.fbx` + `dragon.png`.
+/// Assignments are resolved **by file name** from explicit pairs in
+/// assignments.cfg, one per line:
+///
+///     model-file.fbx = image-file.png
+///
+/// (`#`-prefixed lines are comments; names are matched case-insensitively
+/// against the files found in the two folders.) Repeating a pair line places
+/// the same model on the image several times - one instance per line, in
+/// file order, each with its own pose. There is no automatic pairing: files
+/// sharing a base name are NOT assigned to each other unless the cfg says so.
 ///
 /// A pair line may carry optional pose columns after a `|`:
 ///
@@ -38,6 +41,9 @@ class DataStore;
 /// the identity pose (translation 0, rotation 0, scale 1). Poses configured
 /// in the app are written back into these columns via persistAssignment(), so
 /// they survive restarts.
+///
+/// Lines starting with `!` (exclusions from the era of automatic name-based
+/// pairing) are ignored on load and dropped by the next session save.
 ///
 /// Every file is validated the same way a manual upload is (images must
 /// decode; models must pass the injected validator); failures are reported as
@@ -65,15 +71,35 @@ public:
 
     /// Writes the current pose of `assignmentId` back into
     /// `<rootDir>/assignments.cfg` so it survives restarts. The edit is
-    /// surgical: the matching pair line is rewritten (or appended when the
-    /// pair - e.g. one auto-created by stem matching - has no line yet) and
-    /// every other line, including comments, is preserved. Identity poses
-    /// write a bare pair with no pose columns.
+    /// surgical: the pair's lines are rewritten in place - one line per
+    /// instance of the (model, image) pair, in creation order - (or appended
+    /// when the pair, e.g. one assigned in the app this session, has no line
+    /// yet) and every other line, including comments, is preserved. Identity
+    /// poses write a bare pair with no pose columns.
     ///
     /// Returns false when the assignment is unknown or when its model/image
     /// files do not live in the library folders - such names could not be
     /// resolved at the next startup, so persisting them would be misleading.
     bool persistAssignment(const std::string& rootDir, Id assignmentId);
+
+    struct SessionSaveResult {
+        int filesCopied{0};
+        int filesRemoved{0};       ///< moved into <root>/removed/
+        int assignmentsSaved{0};
+        std::vector<std::string> warnings;
+    };
+
+    /// Saves the whole current session into the library so it is restored on
+    /// the next startup - a full sync in both directions:
+    ///  * every image/model whose file lives outside the library folders is
+    ///    copied in (and the store re-pointed at the copy);
+    ///  * library files whose asset was removed from the session are moved
+    ///    into `<root>/removed/` (never deleted outright);
+    ///  * assignments.cfg is rewritten to hold exactly the current
+    ///    assignments with their poses: stale pair lines (and legacy `!`
+    ///    exclusion lines) are dropped. Comments are preserved.
+    /// Missing library folders are created.
+    SessionSaveResult saveSession(const std::string& rootDir);
 
 private:
     std::shared_ptr<DataStore> store_;

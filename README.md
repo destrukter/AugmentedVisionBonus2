@@ -24,37 +24,62 @@ The application opens **three independent OS windows at the same time**, all bac
 by one shared in-memory data store (see `src/storage`).
 
 1. **Upload window** (`src/ui/UploadWindow`)
-   - Upload images and FBX models. Uploads are validated immediately and the
+   - Upload images and 3D models (FBX or OBJ). Uploads are validated immediately and the
      outcome (success / warning / error) is shown in the window — a broken
      image or model file is rejected with a reason, and images with too few
      trackable features get a warning.
-   - Assign an FBX model to an image. One model may be assigned to many images.
+   - Assign an FBX model to an image. One model may be assigned to many
+     images - and to the same image several times: each click of Assign adds
+     another independent copy with its own pose.
    - Revert (unassign) and re-assign freely.
-   - For every model assigned to an image, a **Configure** button opens that pairing
-     in the Configure window.
+   - Remove images/models with the `x` next to each entry (assignments to
+     them are removed along).
+   - **Save session to library**: a full sync — assets uploaded from outside
+     the library are copied into `assets/library/`, every assignment is
+     written with its pose to `assignments.cfg`, stale entries for reverted
+     assignments are dropped, and files of removed assets are moved to
+     `assets/library/removed/`. The next start restores exactly the saved
+     session.
+   - Each picture has one **Configure** button that opens the image (with all
+     its assigned models) in the Configure window.
 
 2. **Configure window** (`src/ui/ConfigureWindow`)
-   - Edit the pose of an FBX model **relative to its image** interactively:
-     a 3D viewport shows the image plane and a translate / rotate / scale
-     gizmo (drag the handles; right-drag orbits the view, wheel zooms).
+   - Edits the poses of the models assigned to one image **relative to that
+     image**: the viewport shows the actual picture and **all** of its
+     assigned models, rendered live, with translate / rotate / scale gizmo
+     handles on the selected model (right-drag orbits the view, wheel zooms).
      Scale is per-axis (with a uniform handle at the gizmo center).
-   - Numeric fields underneath give exact control over the same values.
-   - **Save** writes the pose back into the data store.
+   - A **Model dropdown** switches which model is being edited; the numeric
+     fields, matrix preview and gizmo follow the selection. Edits are kept
+     per model, so switching never loses unsaved changes (marked `*`).
+   - Numeric fields give exact control over the same values.
+   - **Save** writes every modified pose back into the data store.
 
 3. **Camera window** (`src/ui/CameraWindow`)
-   - Streams the camera feed and tracks the uploaded images (OpenCV ORB
-     features; contrast-normalised so tracking survives lighting changes,
-     temporally smoothed so poses don't jitter or flicker). Targets don't
-     need to face the camera straight on: detection holds up to roughly
-     40 degrees of out-of-plane tilt (and any in-plane rotation), with the
-     estimated pose following the tilt.
+   - Streams the camera feed and tracks the uploaded images with a
+     detect-then-track pipeline: OpenCV ORB feature matching finds a target
+     once, then Lucas-Kanade optical flow carries its points from frame to
+     frame (far steadier than re-matching every frame); when too many points
+     are lost, ORB re-acquires the target automatically. Contrast-normalised
+     so tracking survives lighting changes, temporally smoothed so poses
+     don't jitter or flicker. Targets don't need to face the camera straight
+     on: acquisition holds up to roughly 40 degrees of out-of-plane tilt
+     (and any in-plane rotation), and optical flow keeps tracking through
+     steeper angles and greater distances once locked on. Any number of
+     different images can be tracked at the same time, each with its own
+     models.
    - A dropdown selects the capture device (on Linux, enumerated from
      /dev/video* with driver names); Reconnect reopens it after replugging.
    - Capture and tracking run on background threads, so the feed stays smooth
      regardless of detection cost, and the newest frame is always shown.
-   - When a tracked image is detected, the FBX models assigned to it are rendered
-     (OGRE3D) at their configured pose. The feed is displayed letterboxed —
-     resizing the window never warps the image or affects tracking.
+   - When a tracked image is detected, the models assigned to it are rendered
+     (OGRE3D) at their configured pose — with their own materials: colors,
+     shininess, vertex colors and diffuse textures (embedded in the model or
+     referenced image files next to it — e.g. an OBJ's `.mtl` textures).
+     Animated FBX files play their
+     animation (skeletal or plain node animation) while rendered. The feed is
+     displayed letterboxed — resizing the window never warps the image or
+     affects tracking.
 
 ## Default asset library (auto-upload at startup)
 
@@ -64,16 +89,16 @@ starts, with the same validation as manual uploads:
 ```
 assets/library/
 ├── images/           # tracked images (*.png *.jpg *.jpeg *.bmp)
-├── models/           # FBX models (*.fbx)
+├── models/           # 3D models (*.fbx *.obj)
 └── assignments.cfg   # optional model -> image pairs
 ```
 
-Assignments between them are resolved **by file name**, two ways:
-
-1. Explicit pairs in `assignments.cfg`, one per line (case-insensitive):
-   `model-file.fbx = image-file.png`
-2. Automatically by base name: `dragon.fbx` + `dragon.png` are paired without
-   any config entry.
+Assignments between them are resolved **by file name** from explicit pairs in
+`assignments.cfg`, one per line (case-insensitive):
+`model-file.fbx = image-file.png`. Repeating a line places the same model on
+the image several times (one copy per line, each with its own pose). There is
+no automatic pairing: files sharing a base name (`dragon.fbx` + `dragon.png`)
+are not assigned to each other unless the cfg says so.
 
 A pair line may carry optional pose columns after a `|`; each part can be
 omitted and defaults to the identity pose (translation 0, rotation 0, scale 1):

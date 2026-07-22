@@ -17,17 +17,18 @@ struct ImageAsset {
     cv::Mat pixels;         ///< Decoded image (lazily loaded; may be empty).
 };
 
-/// An uploaded FBX 3D model that can be rendered on top of images.
+/// An uploaded 3D model (FBX or OBJ) that can be rendered on top of images.
 struct ModelAsset {
     Id id{kInvalidId};
     std::string name;       ///< Display name (defaults to the file name).
-    std::string filePath;   ///< Absolute path to the .fbx file.
+    std::string filePath;   ///< Absolute path to the model file (.fbx or .obj).
 };
 
 /// Links one model to one image with a configurable relative pose.
 ///
-/// One model may appear in many assignments (one per image it is assigned to);
-/// the (modelId, imageId) pair is unique. `transform` defaults to identity.
+/// One model may appear in many assignments - across different images, and
+/// also multiple times on the *same* image (each placed copy is its own
+/// assignment with its own pose). `transform` defaults to identity.
 struct Assignment {
     Id id{kInvalidId};
     Id modelId{kInvalidId};

@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <set>
 #include <sstream>
 #include <utility>
 
@@ -134,18 +136,19 @@ Transform parsePose(const std::string& spec, int lineNo,
                                ": pose token '" + token + "' " + reason +
                                ", using the default");
         };
-        if (token.size() < 3 || token[1] != '=') {
+        const auto eq = token.find('=');
+        if (eq == std::string::npos || eq == 0 || eq + 1 >= token.size()) {
             warn("is not of the form t=x,y,z / r=x,y,z / s=x,y,z (or s=v)");
             continue;
         }
-        const char key = static_cast<char>(std::tolower(token[0]));
-        const std::string values = token.substr(2);
+        const std::string key = toLower(token.substr(0, eq));
+        const std::string values = token.substr(eq + 1);
         float nums[3] = {0.0f, 0.0f, 0.0f};
-        if (key == 't' && parseFloats(values, nums, 3)) {
+        if (key == "t" && parseFloats(values, nums, 3)) {
             t.translation = Eigen::Vector3f(nums[0], nums[1], nums[2]);
-        } else if (key == 'r' && parseFloats(values, nums, 3)) {
+        } else if (key == "r" && parseFloats(values, nums, 3)) {
             t.rotationEulerDeg = Eigen::Vector3f(nums[0], nums[1], nums[2]);
-        } else if (key == 's') {
+        } else if (key == "s") {
             // Either three per-axis values or one uniform value.
             bool ok = parseFloats(values, nums, 3);
             if (!ok && parseFloats(values, nums, 1)) {
@@ -172,6 +175,16 @@ std::string formatFloat(float v) {
     return buffer;
 }
 
+/// Key identifying a (model, image) pair case-insensitively by file name.
+std::string pairKey(const std::string& modelName, const std::string& imageName) {
+    return toLower(modelName) + "\n" + toLower(imageName);
+}
+
+std::string formatVec3(const Eigen::Vector3f& v) {
+    return formatFloat(v.x()) + "," + formatFloat(v.y()) + "," +
+           formatFloat(v.z());
+}
+
 /// Formats the pose columns written after `|`; empty for the identity pose
 /// (a bare pair line already means "identity"). A uniform scale is written as
 /// a single value, per-axis scales as x,y,z.
@@ -183,12 +196,18 @@ std::string formatPose(const Transform& t) {
     if (t.scale.x() != t.scale.y() || t.scale.y() != t.scale.z()) {
         scale += "," + formatFloat(t.scale.y()) + "," + formatFloat(t.scale.z());
     }
-    return "t=" + formatFloat(t.translation.x()) + "," +
-           formatFloat(t.translation.y()) + "," +
-           formatFloat(t.translation.z()) + " r=" +
-           formatFloat(t.rotationEulerDeg.x()) + "," +
-           formatFloat(t.rotationEulerDeg.y()) + "," +
-           formatFloat(t.rotationEulerDeg.z()) + " s=" + scale;
+    return "t=" + formatVec3(t.translation) + " r=" +
+           formatVec3(t.rotationEulerDeg) + " s=" + scale;
+}
+
+/// One complete cfg pair line: `model = image [| pose]`.
+std::string formatPairLine(const std::string& modelName,
+                           const std::string& imageName, const Transform& t) {
+    std::string line = modelName + " = " + imageName;
+    if (const std::string pose = formatPose(t); !pose.empty()) {
+        line += " | " + pose;
+    }
+    return line;
 }
 
 /// True when `filePath` is a direct child of `<root>/<subdir>` - i.e. the
@@ -234,7 +253,7 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
     }
 
     // Models: validated through the injected checker (Assimp in the app).
-    for (const fs::path& file : listFiles(root / "models", {".fbx"})) {
+    for (const fs::path& file : listFiles(root / "models", {".fbx", ".obj"})) {
         std::string error;
         if (validateModel_ && !validateModel_(file.string(), &error)) {
             report.warnings.push_back("model '" + file.filename().string() +
@@ -247,7 +266,8 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
         ++report.modelsAdded;
     }
 
-    // Explicit name pairs from assignments.cfg.
+    // Explicit name pairs from assignments.cfg - the only way assignments
+    // are created at load time (there is no automatic name-based pairing).
     const fs::path cfgPath = root / "assignments.cfg";
     if (fs::exists(cfgPath, ec)) {
         std::ifstream cfg(cfgPath);
@@ -257,6 +277,12 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
             ++lineNo;
             const std::string stripped = trim(line);
             if (stripped.empty() || stripped[0] == '#') {
+                continue;
+            }
+            if (stripped[0] == '!') {
+                // Legacy exclusion lines from the era of automatic stem
+                // pairing; meaningless now, ignored (and dropped on the next
+                // session save).
                 continue;
             }
             std::string modelName;
@@ -278,37 +304,14 @@ AssetLibrary::Report AssetLibrary::load(const std::string& rootDir) {
                     " not found in the library, skipped");
                 continue;
             }
-            Id assignmentId;
-            if (const auto existing = store_->findAssignment(modelId, imageId)) {
-                assignmentId = *existing;
-            } else {
-                assignmentId = store_->assign(modelId, imageId);
-                ++report.assignmentsCreated;
-            }
+            // Each pair line creates its own assignment: repeating a line
+            // places the same model on the image several times (one instance
+            // per line, in file order, each with its own pose).
+            const Id assignmentId = store_->assign(modelId, imageId);
+            ++report.assignmentsCreated;
             if (!poseSpec.empty()) {
                 store_->setTransform(
                     assignmentId, parsePose(poseSpec, lineNo, report.warnings));
-            }
-        }
-    }
-
-    // Automatic pairing: same base name (stem) links a model to an image,
-    // e.g. dragon.fbx <-> dragon.png.
-    for (const Id modelId : store_->modelIds()) {
-        const ModelAsset* model = store_->model(modelId);
-        if (!model) {
-            continue;
-        }
-        const std::string stem = toLower(fs::path(model->name).stem().string());
-        for (const Id imageId : store_->imageIds()) {
-            const ImageAsset* img = store_->image(imageId);
-            if (!img ||
-                toLower(fs::path(img->name).stem().string()) != stem) {
-                continue;
-            }
-            if (!store_->findAssignment(modelId, imageId)) {
-                store_->assign(modelId, imageId);
-                ++report.assignmentsCreated;
             }
         }
     }
@@ -333,16 +336,24 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
         return false; // not library assets: names would not resolve on restart
     }
 
-    std::string newLine = model->name + " = " + image->name;
-    if (const std::string pose = formatPose(assignment->transform);
-        !pose.empty()) {
-        newLine += " | " + pose;
+    // The cfg holds one line per *instance* of a pair (the same model may be
+    // placed on an image several times), in assignment-creation order - the
+    // order load() recreates them in. A single instance's line cannot be
+    // told apart from its siblings', so all of the pair's lines are rewritten
+    // from the store's current instances.
+    std::vector<std::string> newLines;
+    for (const Id aid : store_->assignmentsForModel(assignment->modelId)) {
+        const Assignment* instance = store_->assignment(aid);
+        if (instance && instance->imageId == assignment->imageId) {
+            newLines.push_back(formatPairLine(model->name, image->name,
+                                              instance->transform));
+        }
     }
 
     // Rewrite only the line(s) for this pair; keep everything else - other
-    // pairs, comments, blank lines - byte-for-byte. Duplicate lines for the
-    // pair are collapsed into one (load applies them in order, so a stale
-    // duplicate would win over the update otherwise).
+    // pairs, comments, blank lines - byte-for-byte. The pair's first line is
+    // replaced by the full instance list; its other lines (and any now-stale
+    // exclusion line) are dropped.
     const fs::path cfgPath = root / "assignments.cfg";
     std::vector<std::string> lines;
     {
@@ -352,29 +363,32 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
             lines.push_back(line);
         }
     }
-    const std::string wantedModel = toLower(model->name);
-    const std::string wantedImage = toLower(image->name);
+    const std::string wanted = pairKey(model->name, image->name);
     bool replaced = false;
     std::vector<std::string> out;
-    out.reserve(lines.size() + 1);
+    out.reserve(lines.size() + newLines.size());
     for (const std::string& line : lines) {
-        const std::string stripped = trim(line);
+        std::string stripped = trim(line);
+        const bool exclusion = !stripped.empty() && stripped[0] == '!';
+        if (exclusion) {
+            stripped = trim(stripped.substr(1));
+        }
         std::string modelName;
         std::string imageName;
         std::string poseSpec;
         const bool matchesPair =
             !stripped.empty() && stripped[0] != '#' &&
             splitPairLine(stripped, modelName, imageName, poseSpec) &&
-            toLower(modelName) == wantedModel && toLower(imageName) == wantedImage;
+            pairKey(modelName, imageName) == wanted;
         if (!matchesPair) {
             out.push_back(line);
-        } else if (!replaced) {
-            out.push_back(newLine);
+        } else if (!exclusion && !replaced) {
+            out.insert(out.end(), newLines.begin(), newLines.end());
             replaced = true;
-        } // further duplicates of the pair are dropped
+        } // remaining pair lines and stale exclusions of the pair are dropped
     }
     if (!replaced) {
-        out.push_back(newLine);
+        out.insert(out.end(), newLines.begin(), newLines.end());
     }
 
     std::ofstream file(cfgPath, std::ios::trunc);
@@ -385,6 +399,190 @@ bool AssetLibrary::persistAssignment(const std::string& rootDir,
         file << line << '\n';
     }
     return file.good();
+}
+
+AssetLibrary::SessionSaveResult AssetLibrary::saveSession(
+    const std::string& rootDir) {
+    SessionSaveResult result;
+    const fs::path root(rootDir);
+    std::error_code ec;
+    fs::create_directories(root / "images", ec);
+    fs::create_directories(root / "models", ec);
+
+    // ---- 1. Move library files whose asset was removed from the session
+    // into <root>/removed/ (never deleted outright, so nothing is lost).
+    // Done before the copy-in below so that re-uploading a different file
+    // under the same name replaces the library copy instead of hitting the
+    // name-collision path.
+    std::set<std::string> imageNames;
+    for (const Id id : store_->imageIds()) {
+        if (const ImageAsset* img = store_->image(id)) {
+            imageNames.insert(toLower(img->name));
+        }
+    }
+    std::set<std::string> modelNames;
+    for (const Id id : store_->modelIds()) {
+        if (const ModelAsset* model = store_->model(id)) {
+            modelNames.insert(toLower(model->name));
+        }
+    }
+    const auto moveRemoved = [&](const char* subdir,
+                                 const std::vector<std::string>& extensions,
+                                 const std::set<std::string>& inSession) {
+        for (const fs::path& file : listFiles(root / subdir, extensions)) {
+            const std::string name = file.filename().string();
+            if (inSession.count(toLower(name))) {
+                continue;
+            }
+            std::error_code mec;
+            fs::create_directories(root / "removed", mec);
+            fs::path dst = root / "removed" / name;
+            for (int i = 1; fs::exists(dst, mec); ++i) {
+                dst = root / "removed" / (std::to_string(i) + "_" + name);
+            }
+            fs::rename(file, dst, mec);
+            if (mec) {
+                result.warnings.push_back("could not move removed '" + name +
+                                          "' out of the library: " +
+                                          mec.message());
+            } else {
+                ++result.filesRemoved;
+            }
+        }
+    };
+    moveRemoved("images", {".png", ".jpg", ".jpeg", ".bmp"}, imageNames);
+    moveRemoved("models", {".fbx", ".obj"}, modelNames);
+
+    // ---- 2. Copy external files into the library.
+    // Copies `filePath` (named `name`) into the library subfolder unless a
+    // file of that name is already there; returns the library path to use, or
+    // empty on failure.
+    const auto bringIntoLibrary = [&](const std::string& filePath,
+                                      const std::string& name,
+                                      const char* subdir) -> std::string {
+        const fs::path dst = root / subdir / name;
+        std::error_code fec;
+        if (fs::exists(dst, fec)) {
+            // A file of this name is already in the library; it wins (names
+            // are the identity the cfg resolves by). Flag likely mismatches.
+            std::error_code sec;
+            const auto srcSize = fs::file_size(filePath, sec);
+            const auto dstSize = fs::file_size(dst, fec);
+            if (!sec && !fec && srcSize != dstSize) {
+                result.warnings.push_back(
+                    "'" + name + "' already exists in the library with "
+                    "different content; the library version is kept");
+            }
+            return dst.string();
+        }
+        if (!fs::copy_file(filePath, dst, fec) || fec) {
+            result.warnings.push_back("could not copy '" + name +
+                                      "' into the library: " + fec.message());
+            return "";
+        }
+        ++result.filesCopied;
+        return dst.string();
+    };
+
+    for (const Id id : store_->imageIds()) {
+        const ImageAsset* img = store_->image(id);
+        if (!img || isInLibraryFolder(img->filePath, root, "images")) {
+            continue;
+        }
+        const std::string libraryPath =
+            bringIntoLibrary(img->filePath, img->name, "images");
+        if (!libraryPath.empty()) {
+            store_->setImageFilePath(id, libraryPath);
+        }
+    }
+    for (const Id id : store_->modelIds()) {
+        const ModelAsset* model = store_->model(id);
+        if (!model || isInLibraryFolder(model->filePath, root, "models")) {
+            continue;
+        }
+        const std::string libraryPath =
+            bringIntoLibrary(model->filePath, model->name, "models");
+        if (!libraryPath.empty()) {
+            store_->setModelFilePath(id, libraryPath);
+        }
+    }
+
+    // ---- 3. Rewrite assignments.cfg to hold exactly the current session:
+    // fresh pair lines for every current assignment (one line per instance,
+    // in creation order, when the same model sits on an image several
+    // times), stale lines dropped, comments kept.
+    std::map<std::string, std::vector<std::string>> pairLines; // key -> lines
+    int assignmentLineCount = 0;
+    for (const Id assignmentId : store_->assignmentIds()) {
+        const Assignment* a = store_->assignment(assignmentId);
+        const ModelAsset* model = a ? store_->model(a->modelId) : nullptr;
+        const ImageAsset* image = a ? store_->image(a->imageId) : nullptr;
+        if (!model || !image) {
+            continue;
+        }
+        if (!isInLibraryFolder(model->filePath, root, "models") ||
+            !isInLibraryFolder(image->filePath, root, "images")) {
+            result.warnings.push_back(
+                "assignment '" + model->name + " = " + image->name +
+                "' could not be saved (its files are not in the library)");
+            continue;
+        }
+        pairLines[pairKey(model->name, image->name)].push_back(
+            formatPairLine(model->name, image->name, a->transform));
+        ++assignmentLineCount;
+    }
+    result.assignmentsSaved = assignmentLineCount;
+
+    const fs::path cfgPath = root / "assignments.cfg";
+    std::vector<std::string> lines;
+    {
+        std::ifstream in(cfgPath);
+        std::string line;
+        while (std::getline(in, line)) {
+            lines.push_back(line);
+        }
+    }
+    std::vector<std::string> out;
+    out.reserve(lines.size() + assignmentLineCount);
+    for (const std::string& line : lines) {
+        const std::string stripped = trim(line);
+        if (stripped.empty() || stripped[0] == '#') {
+            out.push_back(line); // comments and spacing survive the sync
+            continue;
+        }
+        if (stripped[0] == '!') {
+            continue; // legacy stem-pairing exclusion line -> dropped
+        }
+        std::string modelName;
+        std::string imageName;
+        std::string poseSpec;
+        if (!splitPairLine(stripped, modelName, imageName, poseSpec)) {
+            out.push_back(line); // unparseable: keep, load() will warn
+            continue;
+        }
+        const std::string key = pairKey(modelName, imageName);
+        if (const auto it = pairLines.find(key); it != pairLines.end()) {
+            // The pair's first line is refreshed in place with all of its
+            // instance lines; the pair's other (stale) lines are dropped.
+            out.insert(out.end(), it->second.begin(), it->second.end());
+            pairLines.erase(it);
+        }
+        // else: stale (pair reverted / asset removed) -> dropped
+    }
+    for (const auto& [key, instanceLines] : pairLines) {
+        // New assignments without an existing line.
+        out.insert(out.end(), instanceLines.begin(), instanceLines.end());
+    }
+
+    std::ofstream file(cfgPath, std::ios::trunc);
+    if (!file) {
+        result.warnings.push_back("could not write " + cfgPath.string());
+        return result;
+    }
+    for (const std::string& line : out) {
+        file << line << '\n';
+    }
+    return result;
 }
 
 } // namespace avb
