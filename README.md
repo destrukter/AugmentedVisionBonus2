@@ -164,3 +164,41 @@ if it lives somewhere unusual, point the app at it at runtime:
 ```bash
 OGRE_MEDIA_DIR=/path/to/OGRE/Media ./build/src/AugmentedVisionBonus2
 ```
+
+### CMake presets
+
+`CMakePresets.json` defines the configure / build / test presets (needs CMake
+3.21+), so the commands above become:
+
+```bash
+cmake --preset default      # configure  -> build/        (RelWithDebInfo)
+cmake --build --preset app  # build just the app executable
+./build/src/AugmentedVisionBonus2
+```
+
+| Preset      | Build type     | Binary dir      |
+| ----------- | -------------- | --------------- |
+| `default`   | RelWithDebInfo | `build/`        |
+| `debug`     | Debug          | `build/debug/`  |
+| `release`   | Release        | `build/release/`|
+
+Build presets: `default`, `app` (executable only, skips the test binaries),
+`debug`, `release`. Test presets: `ctest --preset default` (or `debug`) runs
+the headless unit-test suites.
+
+### Running in VS Code
+
+Install the **C/C++ Extension Pack** (which includes CMake Tools), then open the
+repository folder:
+
+1. CMake Tools picks up `CMakePresets.json` and asks for a **configure preset** —
+   choose `debug` if you want to step through code, otherwise `default`.
+2. Pick the **build preset** and set the launch target to
+   `AugmentedVisionBonus2` from the status bar.
+3. **F7** builds; **F5** debugs and **Shift+F5** runs without the debugger.
+
+The app takes no command-line arguments, and the working directory does not
+matter: the assets directory is compiled into the binary. To override it, set
+`AVB_LIBRARY_DIR` (or `OGRE_MEDIA_DIR`) in `cmake.debugConfig.environment` in
+your local `.vscode/settings.json` — `.vscode/` is git-ignored, so those stay
+personal.
