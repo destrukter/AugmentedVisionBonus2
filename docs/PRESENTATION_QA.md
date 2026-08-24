@@ -186,7 +186,8 @@ corners. The threshold is restored immediately.
 flat colour, smooth gradients, and *repeating patterns* — every feature has a
 near-identical twin, so the ratio test rejects almost everything. Handled at
 upload: `countTrackableFeatures` runs the same preprocessing chain and warns
-below roughly 50 features; an image with no descriptors is never registered.
+below 60 features (`kLowFeatureThreshold`); an image with no descriptors at all is
+never registered as a target.
 
 **Q15 — You throw away colour.** Deliberate. ORB is defined on intensity, and
 three channels would triple detection cost for features that mostly coincide with
